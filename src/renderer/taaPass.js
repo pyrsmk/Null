@@ -89,7 +89,7 @@ export class TAAPass {
   render(renderer, mainScene, camera, vel) {
     const w = this.msaaTarget.width, h = this.msaaTarget.height;
     const moving = vel > 0.002;
-    const blend  = moving ? Math.min(0.95, 0.08 + vel * 4.0) : 0.04;
+    const blend  = moving ? Math.min(0.95, 0.08 + vel * 4.0) : 0.15;
 
     // Pass 1 : scène → MSAA target
     renderer.setRenderTarget(this.msaaTarget);

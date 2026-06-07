@@ -6,6 +6,7 @@ import { TAAPass } from './renderer/taaPass.js';
 import { generateBuildings, buildBuildingGeometry } from './world/buildings.js';
 import { buildFloorGeometry } from './world/floor.js';
 import { buildScene } from './world/scene.js';
+import { StarSystem } from './world/stars.js';
 import { Character } from './physics/character.js';
 import { Keyboard } from './input/keyboard.js';
 import { Mouse } from './input/mouse.js';
@@ -25,6 +26,8 @@ const floorGeo       = buildFloorGeometry();
 const fontTexture    = createFontTexture();
 const sceneMaterial  = createSceneMaterial(fontTexture);
 const scene          = buildScene(sceneMaterial, buildingGeo, floorGeo, buildingsData);
+const starSystem = new StarSystem();
+scene.add(starSystem.mesh);
 
 // ── Caméra Three.js ───────────────────────────────────────────────
 const camera = new THREE.PerspectiveCamera(
@@ -96,9 +99,14 @@ function loop(now) {
   const { jx, jy } = taa.computeJitter(vel, renderer.domElement.width, renderer.domElement.height);
   sceneMaterial.uniforms.uJitter.value.set(jx, jy);
 
+  const su = starSystem.material.uniforms;
+  su.uView.value.copy(camera.matrixWorldInverse);
+  su.uProjection.value.copy(camera.projectionMatrix);
+  su.uJitter.value.set(jx, jy);
+  su.uTime.value = now / 1000;
+
   renderer.autoClear = true;
   taa.render(renderer, scene, camera, vel);
-  renderer.autoClear = false;
 
   fpsAccum += now - fpsLast;
   fpsLast   = now;

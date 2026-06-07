@@ -46,10 +46,13 @@ src/
       scene.frag.glsl           # Binary-digit wall rendering + Tron-grid floor
       taa.vert.glsl             # Full-screen quad (NDC)
       taa.frag.glsl             # Temporal blend with velocity-adaptive alpha
+      star.vert.glsl            # Rotation-only view (no parallax) + push to far plane for skybox depth trick
+      star.frag.glsl            # Simple glow + core disc; additive blending
   world/
     buildings.js                # generateBuildings() (data) + buildBuildingGeometry() (mesh)
     floor.js                    # Single oversized quad at y = -0.05
     scene.js                    # Assembles Three.js Scene; per-mesh onBeforeRender sets uniforms
+    stars.js                    # StarSystem: 3 000 static points on full sphere (camera-relative skybox)
 ```
 
 ## Architecture
@@ -64,6 +67,7 @@ requestAnimationFrame
   ├── camera sync (position/rotation from character state)
   ├── uniform update (uView, uProjection, uTime, uJitter)
   ├── taa.computeJitter(vel, w, h)         // Halton(2,3), frozen when still
+  ├── starSystem uniforms update (uView/uProjection/uJitter — rotation-only view in shader)
   └── taa.render(renderer, scene, camera, vel)
         ├── Pass 1: scene → MSAA target (4× samples)
         ├── Pass 2: TAA resolve → current ping-pong buffer
@@ -74,7 +78,7 @@ requestAnimationFrame
 
 - `renderer.setPixelRatio(1)` — TAA replaces native SSAA
 - MSAA target (`samples: 4`) handled by Three.js internally
-- TAA blend factor: `0.04` (still) → up to `0.95` (fast motion)
+- TAA blend factor: `0.15` (still) → up to `0.95` (fast motion)
 - All geometry has `frustumCulled = false`
 - Single shared `RawShaderMaterial`; `onBeforeRender` mutates `uSeed` and `uModel` per mesh
 
