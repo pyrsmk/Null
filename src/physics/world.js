@@ -96,6 +96,7 @@ export class WallFace extends Surface {
 // ── World ──────────────────────────────────────────────────────────
 
 const _wup = new THREE.Vector3();
+const _ray = new THREE.Vector3();
 
 export class World {
   constructor() {
@@ -142,18 +143,24 @@ export class World {
     return result;
   }
 
-  // Returns the nearest surface whose normal diverges ≥ 45° from worldUp,
-  // and on whose normal side the player currently stands.
-  findTransitionCandidate(pos, worldUp, maxDist) {
-    let best = null, bestDist = maxDist;
+  // Returns the surface the player is looking at (ray from pos along lookDir),
+  // whose normal diverges ≥ 45° from worldUp and that the player stands in front of.
+  findTransitionCandidate(pos, worldUp, lookDir, maxDist) {
+    let best = null, bestT = maxDist;
     for (const obj of this._nearby(pos.x, pos.z)) {
       if (!(obj instanceof WallFace)) continue;
-      const d = obj.distanceTo(pos);
-      if (d <= 0 || d >= bestDist) continue;
       const dot = _wup.copy(obj.normal).dot(worldUp);
       if (Math.acos(Math.max(-1, Math.min(1, dot))) < Math.PI / 4) continue;
       if (obj._signedDist(pos) < 0) continue; // player must be on normal side
-      bestDist = d;
+      // Ray-plane intersection: t = (offset - dot(pos, normal)) / dot(lookDir, normal)
+      const denom = lookDir.dot(obj._normal);
+      if (denom >= 0) continue; // ray pointing away from or parallel to surface
+      const t = (obj._offset - pos.dot(obj._normal)) / denom;
+      if (t <= 0 || t >= bestT) continue;
+      // Check if the ray hits within the face bounds
+      _ray.copy(pos).addScaledVector(lookDir, t);
+      if (!obj._inBounds(_ray)) continue;
+      bestT = t;
       best = obj;
     }
     return best;

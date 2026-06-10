@@ -16,6 +16,7 @@ const _v1    = new THREE.Vector3();
 const _v2    = new THREE.Vector3();
 const _v3    = new THREE.Vector3();
 const _q1    = new THREE.Quaternion();
+const _q2    = new THREE.Quaternion();
 
 export class Player {
   constructor(world) {
@@ -197,7 +198,11 @@ export class Player {
 
     // ── E key: surface transition ───────────────────────────────────
     if (ePressed) {
-      const surface = this._world.findTransitionCandidate(this.pos, worldUp, 150);
+      // Compute look direction from camera orientation, then restore _v1 (worldUp)
+      this.getCameraQuaternion(_q2);
+      const lookDir = _v3.set(0, 0, -1).applyQuaternion(_q2);
+      this.getWorldUp(_v1);
+      const surface = this._world.findTransitionCandidate(this.pos, worldUp, lookDir, 150);
       if (surface) {
         this._startTransition({
           nx:     surface.normal.x,
