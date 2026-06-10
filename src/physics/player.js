@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 import { CFG } from '../config.js';
 
-const JUMP_STRENGTH  = 3.1;
-const GRAVITY        = 0.08;
-const CAM_BASE_Y     = 75;
-const BOB_AMPLITUDE  = 1.75;
-const BOB_SPEED      = 0.10;
-const ZERO_G_FRAMES  = 6;
-const GLITCH_FRAMES  = 10;
-const AIR_STEER      = 0.12;
+const JUMP_STRENGTH      = 3.1;
+const GRAVITY            = 0.08;
+const CAM_BASE_Y         = 75;
+const BOB_AMPLITUDE      = 1.75;
+const BOB_SPEED          = 0.10;
+const TRANSITION_FRAMES  = 30;
+const GLITCH_FRAMES      = 10;
+const AIR_STEER          = 0.12;
 
 // Reusable temporaries
 const _yAxis = new THREE.Vector3(0, 1, 0);
@@ -40,10 +40,14 @@ export class Player {
     this._bobPhase    = 0;
     this._bobStrength = 0;
 
-    this._zeroGFrames    = 0;
-    this._pendingSurface = null;
-    this.glitchFrames    = 0;
-    this._bobOffset      = 0;
+    this._transitionFrames    = 0;
+    this._transitionTotal     = 0;
+    this._transitionStartRot  = new THREE.Quaternion();
+    this._transitionTargetRot = new THREE.Quaternion();
+    this._transitionStartPos  = new THREE.Vector3();
+    this._transitionTargetPos = new THREE.Vector3();
+    this.glitchFrames         = 0;
+    this._bobOffset           = 0;
   }
 
   get x() { return this.pos.x; }
@@ -65,36 +69,45 @@ export class Player {
     return out;
   }
 
-  // ── Surface activation ────────────────────────────────────────────
+  // ── Surface transition ────────────────────────────────────────────
 
-  _activateSurface(surf) {
+  _startTransition(surf) {
     const newUp = _v1.set(surf.nx, surf.ny, surf.nz);
 
-    // Reposition so feet sit exactly CAM_BASE_Y + camRadius above the surface,
-    // matching the invariant established in the constructor for the floor.
+    // Compute target position: feet land at CAM_BASE_Y + camRadius from surface
     const currentDist = newUp.dot(this.pos) - surf.offset;
-    this.pos.addScaledVector(newUp, (CAM_BASE_Y + CFG.camRadius) - currentDist);
+    this._transitionTargetPos.copy(this.pos)
+      .addScaledVector(newUp, (CAM_BASE_Y + CFG.camRadius) - currentDist);
 
-    // Rotate worldRotation so that local Y → new surface normal
+    // Compute target worldRotation: local Y → new surface normal
     _q1.setFromUnitVectors(this.getWorldUp(_v2), newUp);
-    this.worldRotation.premultiply(_q1);
+    this._transitionTargetRot.copy(this.worldRotation).premultiply(_q1);
 
-    // Zero velocity — player lands cleanly on the new surface
+    // Snapshot start state
+    this._transitionStartRot.copy(this.worldRotation);
+    this._transitionStartPos.copy(this.pos);
+
     this._vel.set(0, 0, 0);
-    this._grounded        = false;
-    this._jumpedWithSprint = false;
+    this._transitionFrames = TRANSITION_FRAMES;
+    this._transitionTotal  = TRANSITION_FRAMES;
   }
 
   // ── Main update ───────────────────────────────────────────────────
 
   update(keyboard, gp) {
-    // Zero-G transition freeze
-    if (this._zeroGFrames > 0) {
-      this._zeroGFrames--;
-      if (this._zeroGFrames === 0 && this._pendingSurface) {
-        this._activateSurface(this._pendingSurface);
-        this._pendingSurface = null;
-        this.glitchFrames    = GLITCH_FRAMES;
+    // Surface transition animation
+    if (this._transitionFrames > 0) {
+      this._transitionFrames--;
+      const t    = 1 - this._transitionFrames / this._transitionTotal;
+      const ease = t * t * (3 - 2 * t); // smoothstep
+      this.worldRotation.slerpQuaternions(
+        this._transitionStartRot, this._transitionTargetRot, ease);
+      this.pos.lerpVectors(
+        this._transitionStartPos, this._transitionTargetPos, ease);
+      if (this._transitionFrames === 0) {
+        this._grounded        = false;
+        this._jumpedWithSprint = false;
+        this.glitchFrames     = GLITCH_FRAMES;
       }
       return;
     }
@@ -186,13 +199,12 @@ export class Player {
     if (ePressed) {
       const surface = this._world.findTransitionCandidate(this.pos, worldUp, 150);
       if (surface) {
-        this._zeroGFrames    = ZERO_G_FRAMES;
-        this._pendingSurface = {
+        this._startTransition({
           nx:     surface.normal.x,
           ny:     surface.normal.y,
           nz:     surface.normal.z,
           offset: surface.offset,
-        };
+        });
       }
     }
   }

@@ -6,7 +6,6 @@ On incarne un Agent IA dépêché pour remettre un système en place après une 
 
 ## TODO
 
-- améliorer l'animation
 - faire en sorte que les objets soient des vraies classes et gèrent leur rendu
 - la touche E propulse directement sur la surface visée par l'angle de vue (si aucune surface atteinte, on ajoute une petite animation pour montrer que ça ne marche pas)
 - ajouter le saut chargé en appuyant longtemps sur Espace
