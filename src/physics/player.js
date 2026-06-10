@@ -9,6 +9,7 @@ const BOB_SPEED          = 0.10;
 const ZERO_G_FRAMES      = 6;
 const GLITCH_FRAMES      = 10;
 const SURFACE_THRESHOLD  = Math.PI / 4;
+const SURFACE_MARGIN     = 30;
 const MIN_JUMP_OFFSET    = -(CAM_BASE_Y - CFG.camRadius - 1);
 
 // Reusable temporaries
@@ -295,6 +296,10 @@ export class Player {
     const wb = CFG.far;
     this.pos.x = Math.max(-wb, Math.min(wb, this.pos.x));
     this.pos.z = Math.max(-wb, Math.min(wb, this.pos.z));
+    // Prevent camera from clipping through horizontal surfaces in wall mode
+    if (this.getWorldUp(_v1).y < 0.9) {
+      this.pos.y = Math.max(SURFACE_MARGIN, Math.min(CFG.buildingH - SURFACE_MARGIN, this.pos.y));
+    }
 
     // ── Gravity & jump ──────────────────────────────────────────────
     const groundH  = this._getGroundHeight();
@@ -313,8 +318,8 @@ export class Player {
         this._velUp            = 0;
         this._jumpedWithSprint = false;
       }
-      // Clamp to prevent drifting through walls when no ground
-      if (this._jumpOffset < MIN_JUMP_OFFSET) {
+      // Clamp to prevent drifting through walls when near a surface
+      if (groundH !== -Infinity && this._jumpOffset < MIN_JUMP_OFFSET) {
         this._jumpOffset = MIN_JUMP_OFFSET;
         this._velUp      = 0;
       }
