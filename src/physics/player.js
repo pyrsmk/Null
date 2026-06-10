@@ -4,7 +4,7 @@ import { CFG, totalW, totalD } from '../config.js';
 const JUMP_STRENGTH      = 3.1;
 const GRAVITY            = 0.08;
 const CAM_BASE_Y         = 75;
-const BOB_AMPLITUDE      = 0.75;
+const BOB_AMPLITUDE      = 1.75;
 const BOB_SPEED          = 0.10;
 const ZERO_G_FRAMES      = 6;
 const GLITCH_FRAMES      = 10;
