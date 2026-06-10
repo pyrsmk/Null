@@ -302,11 +302,11 @@ export class Player {
     }
 
     // ── Gravity & jump ──────────────────────────────────────────────
-    const groundH  = this._getGroundHeight();
+    const groundH = this._getGroundHeight();
     const grounded = this._jumpOffset <= groundH && this._velUp <= 0;
 
     if (jumpPressed && grounded) {
-      this._velUp            = JUMP_STRENGTH;
+      this._velUp            = JUMP_STRENGTH * (sprint ? 1.6 : 1.0);
       this._jumpedWithSprint = sprint;
     }
 
