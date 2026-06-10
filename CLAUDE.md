@@ -33,10 +33,10 @@ src/
   main.js                       # Renderer init + game loop (requestAnimationFrame)
   input/
     keyboard.js                 # Set-based key tracking; clearJustPressed() called once/frame
-    mouse.js                    # Pointer-lock delta → character.yaw / pitch
+    mouse.js                    # Pointer-lock delta → player.yaw / pitch
     gamepad.js                  # navigator.getGamepads()[0]; dead-zone; justPressed
   physics/
-    character.js                # Hand-rolled AABB: movement, jump, wall-jump, sprint, head bob
+    player.js                   # Player: worldRotation quaternion, unified collision, surface transitions
   renderer/
     fontTexture.js              # Canvas-drawn glyphs '0'/'1' → THREE.CanvasTexture
     materials.js                # RawShaderMaterial factory (scene shaders + uniforms)
@@ -62,16 +62,16 @@ src/
 ```
 requestAnimationFrame
   ├── gamepad.read()
-  ├── character.update(keyboard, gp)       // physics + AABB collision
+  ├── player.update(keyboard, gp)        // physics + collision
   ├── keyboard.clearJustPressed()
-  ├── camera sync (position/rotation from character state)
+  ├── camera sync: position + player.getCameraQuaternion(camera.quaternion)
   ├── uniform update (uView, uProjection, uTime, uJitter)
-  ├── taa.computeJitter(vel, w, h)         // Halton(2,3), frozen when still
-  ├── starSystem uniforms update (uView/uProjection/uJitter — rotation-only view in shader)
-  └── taa.render(renderer, scene, camera, vel)
+  ├── taa.computeJitter(vel, w, h)       // Halton(2,3), frozen when still
+  ├── starSystem uniforms update
+  └── taa.render(renderer, scene, camera, vel, glitchStrength)
         ├── Pass 1: scene → MSAA target (4× samples)
         ├── Pass 2: TAA resolve → current ping-pong buffer
-        └── Pass 3: blit current → screen
+        └── Pass 3: blit current → screen (chromatic aberration if glitchStrength > 0)
 ```
 
 ### Rendering Pipeline
@@ -89,18 +89,37 @@ requestAnimationFrame
 - Floor: one large quad at `y = -0.05`, size = `CFG.far * 2`
 - Deterministic seed: `(col * 1273 + row * 4937 + (col ^ row) * 131) % 9973`
 
-### Physics (`src/physics/character.js`)
+### Physics (`src/physics/player.js`)
 
 - No Rapier yet — fully hand-rolled
-- AABB collision checks against nearest 3×3 grid cells
+- **"World rotates" model:** a single `worldRotation` quaternion maps player-local axes
+  to world axes. On the floor `worldRotation = identity` (local Y = world Y).
+  On a wall, `worldRotation` maps local Y → wall normal.
+- **Movement:** always computed in player-local frame (XZ + yaw), then converted to
+  world space via `worldRotation`. Collision is per-axis in world space using
+  `_isInsideBuilding(x, y, z)` — same check for all surfaces.
+- **Camera:** `getCameraQuaternion()` = `worldRotation * yawQ(Y, -yaw) * pitchQ(X, -pitch)`.
+  Called from `main.js` — no manual quaternion assembly.
+- **Ground detection:** floor mode checks platform heights (0 or buildingH);
+  wall mode checks if feet are over a building face. Both return a ground height;
+  physics code is identical (`grounded = jumpOffset ≤ groundH`).
+- **Surface transition (E key):** detects the closest surface (wall face, roof, or floor)
+  within 100 units whose normal differs ≥45° from current `worldUp`. All surfaces use the
+  same distance metric (perpendicular distance to the face; for floor, `pos.y`). Transition:
+  zero-G freeze → `_activateSurface()` computes new `worldRotation` preserving the player's
+  forward direction (projected onto new surface plane). `yaw` and `pitch` are **never
+  modified** by transitions.
 - Jump strength: `JUMP_STRENGTH 3.1`, gravity `0.08`/frame
-- Wall-jump: 4-probe normal detection; horizontal impulse `WALL_JUMP_H 11.25`, decay `0.97`
 - Sprint: 4× speed; sprint-jump preserves `1.5×` air speed
-- Head bob: sinusoidal, disabled airborne, doubled speed while sprinting
+- Head bob: sinusoidal, disabled airborne, 2.5× speed while sprinting
+- `glitchStrength` (0–1, decays over `GLITCH_FRAMES = 10` frames) drives chromatic
+  aberration in the TAA blit pass.
+- `MIN_JUMP_OFFSET = -(CAM_BASE_Y - camRadius - 1)` prevents drifting through walls
+  when no ground is detected (wall edge case).
 
 ### Input
 
-- **Keyboard:** `keydown/keyup` → `Set`; WASD/arrows, Space (jump), Shift (sprint)
+- **Keyboard:** `keydown/keyup` → `Set`; WASD/arrows, Space (jump), Shift (sprint), **E (surface activation)**
 - **Mouse:** pointer-lock only; sensitivity `0.003 rad/px`; pitch clamped `±π/2`
 - **Gamepad:** axes 0–3, button 0 (jump), button 4 (sprint); dead-zone `0.15`
 
@@ -110,7 +129,8 @@ requestAnimationFrame
 - `scene.vert`: jitter as `cp.xy += uJitter * cp.w` (correct perspective-space offset)
 - `scene.frag`: branches on `vNormal.y` (floor / wall / roof); animated binary glyph grid with
   LOD blending; Tron-grid floor with minor/major gridlines
-- `taa.frag`: `uVelocity`-driven blend; `uHistValid` guards first frame
+- `taa.frag`: `uVelocity`-driven blend; `uHistValid` guards first frame;
+  `uGlitch` (0–1) adds chromatic aberration during the blit pass (Pass 3 only)
 
 ## Dev Commands
 
@@ -132,9 +152,11 @@ GLSL files are imported as raw strings via `?raw` (configured in `vite.config.js
 4. **No frustum culling.** All meshes set `frustumCulled = false`. Do not enable it without
    profiling — the grid is large and the camera is inside it.
 5. **`keyboard.clearJustPressed()` must be called exactly once per frame**, after
-   `character.update` and before the next frame. Moving this call breaks jump detection.
+   `player.update` and before the next frame. Moving this call breaks jump detection.
 6. **Rapier3D is declared but not initialised.** Do not activate it without replacing or
-   disabling the hand-rolled AABB system in `character.js`.
+   disabling the hand-rolled system in `player.js`.
 7. **Pixel ratio is fixed at 1.** The TAA jitter offset is designed around this. Changing
    `setPixelRatio` will misalign it.
-8. **Camera `rotation.order = 'YXZ'`** (yaw then pitch). Do not change — FPS look depends on it.
+8. **Camera orientation is quaternion-based.** `player.getCameraQuaternion()` computes
+   `worldRotation * yawQ * pitchQ` in local frame. Do not reintroduce manual quaternion
+   assembly in `main.js`.

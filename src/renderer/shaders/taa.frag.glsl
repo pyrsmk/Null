@@ -6,13 +6,27 @@ uniform vec2      uTexelSize;
 uniform float     uBlend;
 uniform float     uHistValid;
 uniform float     uVelocity;
+uniform float     uGlitch;
 
 in vec2 vUV;
 out vec4 fragColor;
 
 void main() {
   vec3 curr = texture(uCurrent, vUV).rgb;
-  if (uHistValid < 0.5) { fragColor = vec4(curr, 1.0); return; }
+  if (uHistValid < 0.5) {
+    if (uGlitch > 0.0) {
+      float str = uGlitch * 0.02;
+      fragColor = vec4(
+        texture(uCurrent, vUV + vec2(str, 0.0)).r,
+        curr.g,
+        texture(uCurrent, vUV - vec2(str, 0.0)).b,
+        1.0
+      );
+    } else {
+      fragColor = vec4(curr, 1.0);
+    }
+    return;
+  }
 
   vec3 hist = texture(uHistory, vUV).rgb;
 

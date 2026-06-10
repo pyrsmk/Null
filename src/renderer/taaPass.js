@@ -56,6 +56,7 @@ export class TAAPass {
         uBlend:     { value: 0.04 },
         uHistValid: { value: 0.0 },
         uVelocity:  { value: 0.0 },
+        uGlitch:    { value: 0.0 },
       },
       glslVersion: THREE.GLSL3,
       depthTest:   false,
@@ -86,7 +87,7 @@ export class TAAPass {
     };
   }
 
-  render(renderer, mainScene, camera, vel) {
+  render(renderer, mainScene, camera, vel, glitch = 0) {
     const w = this.msaaTarget.width, h = this.msaaTarget.height;
     const moving = vel > 0.002;
     const blend  = moving ? Math.min(0.95, 0.08 + vel * 4.0) : 0.15;
@@ -103,6 +104,7 @@ export class TAAPass {
     u.uBlend.value     = blend;
     u.uHistValid.value = this.histValid ? 1.0 : 0.0;
     u.uVelocity.value  = vel;
+    u.uGlitch.value    = glitch;
 
     renderer.setRenderTarget(this.current);
     renderer.render(this._scene, this._camera);

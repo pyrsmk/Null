@@ -7,7 +7,7 @@ import { generateBuildings, buildBuildingGeometry } from './world/buildings.js';
 import { buildFloorGeometry } from './world/floor.js';
 import { buildScene } from './world/scene.js';
 import { StarSystem } from './world/stars.js';
-import { Character } from './physics/character.js';
+import { Player } from './physics/player.js';
 import { Keyboard } from './input/keyboard.js';
 import { Mouse } from './input/mouse.js';
 import { Gamepad } from './input/gamepad.js';
@@ -33,18 +33,16 @@ scene.add(starSystem.mesh);
 const camera = new THREE.PerspectiveCamera(
   CFG.fov, window.innerWidth / window.innerHeight, CFG.near, CFG.far
 );
-// YXZ : yaw d'abord (monde Y), puis pitch (local X) → vue FPS correcte
-camera.rotation.order = 'YXZ';
 
 // ── TAA ───────────────────────────────────────────────────────────
 const taa = new TAAPass(window.innerWidth, window.innerHeight);
 
-// ── Physique / personnage ─────────────────────────────────────────
-const character = new Character(buildingsData);
+// ── Player ──────────────────────────────────────────────────────
+const player = new Player(buildingsData);
 
 // ── Input ────────────────────────────────────────────────────────
 const keyboard = new Keyboard();
-const mouse    = new Mouse(renderer.domElement, character);
+const mouse    = new Mouse(renderer.domElement, player);
 const gamepad  = new Gamepad();
 
 // ── Resize ────────────────────────────────────────────────────────
@@ -67,34 +65,33 @@ function loop(now) {
   const gp = gamepad.read();
 
   if (gp) {
-    character.yaw   += gp.rx * 0.03;
-    character.pitch  = Math.max(
-      -Math.PI / 2, Math.min(Math.PI / 2, character.pitch + gp.ry * 0.025)
+    player.yaw   += gp.rx * 0.03;
+    player.pitch  = Math.max(
+      -Math.PI / 2, Math.min(Math.PI / 2, player.pitch + gp.ry * 0.025)
     );
   }
 
-  character.update(keyboard, gp);
+  player.update(keyboard, gp);
   keyboard.clearJustPressed();
 
-  camera.position.set(character.x, character.y, character.z);
-  camera.rotation.y = -character.yaw;
-  camera.rotation.x = -character.pitch;
+  camera.position.copy(player.pos);
+  player.getCameraQuaternion(camera.quaternion);
   camera.updateMatrixWorld();
 
   sceneMaterial.uniforms.uView.value.copy(camera.matrixWorldInverse);
   sceneMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
   sceneMaterial.uniforms.uTime.value = now / 1000;
 
-  const vel = Math.abs(character.x   - taa.prevX)
-            + Math.abs(character.y   - taa.prevY)
-            + Math.abs(character.z   - taa.prevZ)
-            + Math.abs(character.yaw   - taa.prevYaw)   * 30
-            + Math.abs(character.pitch - taa.prevPitch) * 30;
-  taa.prevX     = character.x;
-  taa.prevY     = character.y;
-  taa.prevZ     = character.z;
-  taa.prevYaw   = character.yaw;
-  taa.prevPitch = character.pitch;
+  const vel = Math.abs(player.x   - taa.prevX)
+            + Math.abs(player.y   - taa.prevY)
+            + Math.abs(player.z   - taa.prevZ)
+            + Math.abs(player.yaw   - taa.prevYaw)   * 30
+            + Math.abs(player.pitch - taa.prevPitch) * 30;
+  taa.prevX     = player.x;
+  taa.prevY     = player.y;
+  taa.prevZ     = player.z;
+  taa.prevYaw   = player.yaw;
+  taa.prevPitch = player.pitch;
 
   const { jx, jy } = taa.computeJitter(vel, renderer.domElement.width, renderer.domElement.height);
   sceneMaterial.uniforms.uJitter.value.set(jx, jy);
@@ -106,7 +103,7 @@ function loop(now) {
   su.uTime.value = now / 1000;
 
   renderer.autoClear = true;
-  taa.render(renderer, scene, camera, vel);
+  taa.render(renderer, scene, camera, vel, player.glitchStrength);
 
   fpsAccum += now - fpsLast;
   fpsLast   = now;
