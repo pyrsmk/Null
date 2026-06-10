@@ -30,13 +30,14 @@ vite.config.js                  # Registers .glsl files as raw string imports
 Runfile.rb                      # Task runner (run dev / build / preview)
 src/
   config.js                     # Single source of truth for all numeric constants (CFG)
-  main.js                       # Renderer init + game loop (requestAnimationFrame)
+  main.js                       # Renderer init + game loop; builds World from buildingsData
   input/
     keyboard.js                 # Set-based key tracking; clearJustPressed() called once/frame
     mouse.js                    # Pointer-lock delta → player.yaw / pitch
     gamepad.js                  # navigator.getGamepads()[0]; dead-zone; justPressed
   physics/
-    player.js                   # Player: worldRotation quaternion, unified collision, surface transitions
+    world.js                    # WorldObject → Surface → WallFace; World spatial grid
+    player.js                   # Player physics — queries World, no geometry knowledge
   renderer/
     fontTexture.js              # Canvas-drawn glyphs '0'/'1' → THREE.CanvasTexture
     materials.js                # RawShaderMaterial factory (scene shaders + uniforms)
@@ -54,6 +55,64 @@ src/
     scene.js                    # Assembles Three.js Scene; per-mesh onBeforeRender sets uniforms
     stars.js                    # StarSystem: 3 000 static points on full sphere (camera-relative skybox)
 ```
+
+## Functional Rules
+
+These rules govern how the engine is designed. They take priority over implementation convenience.
+
+### World objects
+
+1. **`WorldObject` is the base of everything in the world.** `Surface` extends it for physical
+   boundaries. Future types (`Gas`, etc.) extend `WorldObject` directly — they are not surfaces.
+
+2. **A `Surface` is a 2D physical boundary, not a solid volume.** A wall, a floor, a roof are all
+   `Surface` instances. The physics engine does not distinguish between them.
+
+3. **Surfaces block in both directions.** A surface has no "accessible side". The normal is used
+   only to decompose velocity and to orient the player during a transition (E key).
+
+4. **`alterVelocity` is the only mechanism for constraining movement.** A surface never assigns
+   `pos` directly. In the normal case penetration doesn't happen; if it does (e.g. a fast fall
+   skips the margin), `alterVelocity` adds a velocity impulse proportional to `−signedDist` to
+   recover next frame. Position is corrected through velocity, never by teleporting.
+
+5. **The player's volume is a property of the player, not of surfaces.** `camRadius` is passed
+   as `margin` to `isCollidingWith` and `alterVelocity`. Surfaces do not hardcode it.
+
+6. **Adding an obstacle = instantiate a `WallFace`, register it in `World`. Nothing else.**
+   Zero changes to `player.js` or any physics logic.
+
+### Collision queries
+
+7. **`World.isCollidingWith(pos, vec, margin)` is the single entry point for collision.**
+   It returns only the surfaces that `pos` is approaching (within `margin`, in direction `vec`).
+   The player calls it — `World` has no knowledge of feet, body, or camera height.
+
+8. **The player makes two collision queries per frame:**
+   - **Feet** `(feetPos = pos - worldUp × CAM_BASE_Y)` — detects ground support.
+     Margin is swept: `CFG.camRadius + max(0, -vel·worldUp)` so fast falls never tunnel.
+   - **Body** `(pos)` — detects lateral obstacles. Margin = `CFG.camRadius`.
+   This separation is the player's responsibility. `World` and surfaces are unaware of it.
+
+9. **`_grounded` is re-derived from collision results every frame and stored for the next frame.**
+   `_grounded = isCollidingWith(feetPos, vel, feetMargin).length > 0`.
+   It is never assumed — only carried forward one frame for input/control decisions.
+
+10. **The player's volume applies below the feet too.** Feet stop at `camRadius` from any surface,
+    consistent with lateral collision. The camera sits at `CAM_BASE_Y + camRadius` above the floor
+    when standing.
+
+### Physics model
+
+11. **Single unified velocity `_vel: THREE.Vector3`.** No separate horizontal/vertical components.
+    Decomposed each frame into normal (worldUp axis) and plane (surface-tangent) components for
+    gravity and input control, then recombined before collision queries.
+
+12. **`worldRotation` is the surface frame.** A single quaternion maps player-local axes to world
+    axes. On floor: identity. On a wall: local Y → wall normal. `yaw` and `pitch` are never
+    modified by surface transitions.
+
+---
 
 ## Architecture
 
@@ -89,37 +148,39 @@ requestAnimationFrame
 - Floor: one large quad at `y = -0.05`, size = `CFG.far * 2`
 - Deterministic seed: `(col * 1273 + row * 4937 + (col ^ row) * 131) % 9973`
 
+### Collision (`src/physics/world.js`)
+
+- **`WorldObject`** — abstract base for all world entities.
+- **`Surface extends WorldObject`** — abstract physical boundary. Method `alterVelocity(pos, vel, margin)`.
+- **`WallFace extends Surface`** — rectangular face: `(nx,ny,nz, offset, u0,u1, v0,v1)`.
+  `offset = dot(anyPointOnFace, normal)`. Tangent axes pre-computed from normal for 2D bounds.
+- **`_isApproaching(pos, vec, margin)`** — internal check used by `World.isCollidingWith`.
+  Skips if `signedDist < -margin` (deep penetration already handled by depenetration impulse).
+- **Floor surface** — `WallFace(0,1,0, 0, -far,far, -far,far)`, registered via `addGlobal`.
+  Finite bounds: the player falls into the void beyond the floor edge.
+- **`World`** — spatial grid `"col,row"` → 3×3 neighbourhood queries + global list.
+- **`findTransitionCandidate(pos, worldUp, maxDist)`** — nearest surface with normal diverging
+  ≥45° from `worldUp`, on whose normal side the player stands.
+- `main.js` builds the world: 4 lateral `WallFace`s + 1 roof per building in their grid cell.
+
 ### Physics (`src/physics/player.js`)
 
 - No Rapier yet — fully hand-rolled
-- **"World rotates" model:** a single `worldRotation` quaternion maps player-local axes
-  to world axes. On the floor `worldRotation = identity` (local Y = world Y).
-  On a wall, `worldRotation` maps local Y → wall normal.
-- **Movement:** always computed in player-local frame (XZ + yaw), then converted to
-  world space via `worldRotation`. Collision is per-axis in world space using
-  `_isInsideBuilding(x, y, z)` — same check for all surfaces.
-- **Camera:** `getCameraQuaternion()` = `worldRotation * yawQ(Y, -yaw) * pitchQ(X, -pitch)`.
-  Called from `main.js` — no manual quaternion assembly.
-- **Ground detection:** floor mode checks platform heights (0 or buildingH);
-  wall mode checks if feet are over a building face. Both return a ground height;
-  physics code is identical (`grounded = jumpOffset ≤ groundH`).
-- **Surface transition (E key):** detects the closest surface (wall face, roof, or floor)
-  within 100 units whose normal differs ≥45° from current `worldUp`. All surfaces use the
-  same distance metric (perpendicular distance to the face; for floor, `pos.y`). Transition:
-  zero-G freeze → `_activateSurface()` computes new `worldRotation` preserving the player's
-  forward direction (projected onto new surface plane). `yaw` and `pitch` are **never
-  modified** by transitions.
-- Jump strength: `JUMP_STRENGTH 3.1`, gravity `0.08`/frame
-- Sprint: 4× speed; sprint-jump preserves `1.5×` air speed
-- Head bob: sinusoidal, disabled airborne, 2.5× speed while sprinting
-- `glitchStrength` (0–1, decays over `GLITCH_FRAMES = 10` frames) drives chromatic
-  aberration in the TAA blit pass.
-- `MIN_JUMP_OFFSET = -(CAM_BASE_Y - camRadius - 1)` prevents drifting through walls
-  when no ground is detected (wall edge case).
+- **"World rotates" model:** `worldRotation` quaternion maps local Y → current surface normal.
+- **Each frame:** decompose `_vel` → apply gravity to normal component → apply input to plane
+  component → recombine → two `isCollidingWith` queries → `alterVelocity` on hits → `pos += _vel`.
+- **Jump:** impulse `JUMP_STRENGTH × (sprint ? 1.6 : 1.0)` added to normal component when grounded.
+  `_jumpedWithSprint` is set at jump time and tracked until landing.
+- **Sprint:** 4× ground speed. Airborne: `_jumpedWithSprint` preserves 4× max speed cap and
+  `1.1×` steer multiplier; a non-sprint jump caps at base speed with no boost.
+- **Head bob:** sinusoidal on `_bobStrength`, disabled airborne, 2.5× speed sprinting.
+- **Surface transition (E key):** zero-G freeze → `_activateSurface()` rotates `worldRotation`,
+  zeroes `_vel`.
+- `glitchStrength` (0–1, `GLITCH_FRAMES = 10`) drives chromatic aberration in TAA blit pass.
 
 ### Input
 
-- **Keyboard:** `keydown/keyup` → `Set`; WASD/arrows, Space (jump), Shift (sprint), **E (surface activation)**
+- **Keyboard:** `keydown/keyup` → `Set`; WASD/arrows, Space (jump), Shift (sprint), **E (transition)**
 - **Mouse:** pointer-lock only; sensitivity `0.003 rad/px`; pitch clamped `±π/2`
 - **Gamepad:** axes 0–3, button 0 (jump), button 4 (sprint); dead-zone `0.15`
 
@@ -158,5 +219,6 @@ GLSL files are imported as raw strings via `?raw` (configured in `vite.config.js
 7. **Pixel ratio is fixed at 1.** The TAA jitter offset is designed around this. Changing
    `setPixelRatio` will misalign it.
 8. **Camera orientation is quaternion-based.** `player.getCameraQuaternion()` computes
-   `worldRotation * yawQ * pitchQ` in local frame. Do not reintroduce manual quaternion
-   assembly in `main.js`.
+   `worldRotation * yawQ * pitchQ`. Yaw always rotates around the **world Y axis** `(0,1,0)`,
+   not the surface normal — this is intentional for consistent look control on walls.
+   Do not reintroduce manual quaternion assembly in `main.js`.

@@ -8,6 +8,8 @@ import { buildFloorGeometry } from './world/floor.js';
 import { buildScene } from './world/scene.js';
 import { StarSystem } from './world/stars.js';
 import { Player } from './physics/player.js';
+import { World, WallFace } from './physics/world.js';
+import { totalW, totalD } from './config.js';
 import { Keyboard } from './input/keyboard.js';
 import { Mouse } from './input/mouse.js';
 import { Gamepad } from './input/gamepad.js';
@@ -37,8 +39,27 @@ const camera = new THREE.PerspectiveCamera(
 // ── TAA ───────────────────────────────────────────────────────────
 const taa = new TAAPass(window.innerWidth, window.innerHeight);
 
+// ── World ────────────────────────────────────────────────────────
+const world = new World();
+const hw = CFG.buildingW / 2, bh = CFG.buildingH;
+
+for (const bld of buildingsData) {
+  const { x: bx, z: bz } = bld;
+  const col = Math.round((bx + totalW / 2) / CFG.spacing);
+  const row = Math.round((bz + totalD / 2) / CFG.spacing);
+  // 4 lateral faces
+  world.add(new WallFace( 1,0,0,  bx+hw,  bz-hw, bz+hw,  0, bh), col, row);
+  world.add(new WallFace(-1,0,0,-(bx-hw), bz-hw, bz+hw,  0, bh), col, row);
+  world.add(new WallFace( 0,0, 1,  bz+hw,  bx-hw, bx+hw, 0, bh), col, row);
+  world.add(new WallFace( 0,0,-1,-(bz-hw), bx-hw, bx+hw, 0, bh), col, row);
+  // Roof
+  world.add(new WallFace(0,1,0, bh, bx-hw, bx+hw, bz-hw, bz+hw), col, row);
+}
+// Finite floor surface matching the floor quad extent
+world.addGlobal(new WallFace(0,1,0, 0, -CFG.far, CFG.far, -CFG.far, CFG.far));
+
 // ── Player ──────────────────────────────────────────────────────
-const player = new Player(buildingsData);
+const player = new Player(world);
 
 // ── Input ────────────────────────────────────────────────────────
 const keyboard = new Keyboard();
@@ -53,6 +74,9 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   taa.setSize(w, h);
 });
+
+// ── Reusable temps for game loop ──────────────────────────────────
+const _loopWU = new THREE.Vector3();
 
 // ── FPS counter ───────────────────────────────────────────────────
 const fpsEl    = document.getElementById('fps');
@@ -74,7 +98,7 @@ function loop(now) {
   player.update(keyboard, gp);
   keyboard.clearJustPressed();
 
-  camera.position.copy(player.pos);
+  camera.position.copy(player.pos).addScaledVector(player.getWorldUp(_loopWU), player._bobOffset);
   player.getCameraQuaternion(camera.quaternion);
   camera.updateMatrixWorld();
 
