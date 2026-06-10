@@ -8,6 +8,7 @@ const BOB_AMPLITUDE      = 1.75;
 const BOB_SPEED          = 0.10;
 const ZERO_G_FRAMES      = 6;
 const GLITCH_FRAMES      = 10;
+const AIR_STEER          = 0.12;
 const SURFACE_THRESHOLD  = Math.PI / 4;
 const SURFACE_MARGIN     = 30;
 const MIN_JUMP_OFFSET    = -(CAM_BASE_Y - CFG.camRadius - 1);
@@ -41,6 +42,10 @@ export class Player {
     this._jumpOffset         = 0;
     this._velUp              = 0;
     this._jumpedWithSprint   = false;
+
+    this._velHorizX = 0;
+    this._velHorizY = 0;
+    this._velHorizZ = 0;
 
     this._bobPhase    = 0;
     this._bobStrength = 0;
@@ -245,6 +250,9 @@ export class Player {
     this._jumpOffset       = Math.max(0, posAlongUp - surf.baseH - CAM_BASE_Y);
     this._velUp            = 0;
     this._jumpedWithSprint = false;
+    this._velHorizX        = 0;
+    this._velHorizY        = 0;
+    this._velHorizZ        = 0;
   }
 
   // ── Main update ───────────────────────────────────────────────────
@@ -268,8 +276,12 @@ export class Player {
     const jumpPressed = keyboard.wasJustPressed('Space') || (gp?.jump ?? false);
     const ePressed    = keyboard.wasJustPressed('KeyE');
 
+    // Grounded state needed before movement to decide velocity mode
+    const groundH = this._getGroundHeight();
+    const grounded = this._jumpOffset <= groundH && this._velUp <= 0;
+
     const airSprintBoost = this._jumpedWithSprint ? 1.1 : 1.0;
-    const s = CFG.camSpeed * (sprint ? 4 : 1) * airSprintBoost;
+    const groundSpeed    = CFG.camSpeed * (sprint ? 4 : 1);
 
     // ── Movement in local frame ─────────────────────────────────────
     let lx = 0, lz = 0;
@@ -279,16 +291,41 @@ export class Player {
     if (keyboard.has('ArrowLeft')  || keyboard.has('KeyA')) lx -= 1;
     if (keyboard.has('ArrowRight') || keyboard.has('KeyD')) lx += 1;
 
-    // Apply yaw, scale by speed, convert to world space
+    // Normalize input direction, apply yaw + worldRotation → world-space direction
     _q1.setFromAxisAngle(_yAxis, -this.yaw);
-    _v1.set(lx, 0, lz).applyQuaternion(_q1).multiplyScalar(s);
-    _v1.applyQuaternion(this.worldRotation);
-    const wmx = _v1.x, wmy = _v1.y, wmz = _v1.z;
+    _v1.set(lx, 0, lz);
+    if (lx !== 0 || lz !== 0) _v1.normalize();
+    _v1.applyQuaternion(_q1).applyQuaternion(this.worldRotation);
+
+    if (grounded) {
+      // Ground: direct velocity from input (instant, snappy)
+      this._velHorizX = _v1.x * groundSpeed;
+      this._velHorizY = _v1.y * groundSpeed;
+      this._velHorizZ = _v1.z * groundSpeed;
+    } else {
+      // Air: small steering nudge only — no full directional control
+      const steer = CFG.camSpeed * AIR_STEER * airSprintBoost;
+      this._velHorizX += _v1.x * steer;
+      this._velHorizY += _v1.y * steer;
+      this._velHorizZ += _v1.z * steer;
+      // Clamp to max air speed (based on sprint state at jump time)
+      const maxSpd = CFG.camSpeed * (this._jumpedWithSprint ? 4 : 1) * airSprintBoost;
+      const spd    = Math.sqrt(this._velHorizX ** 2 + this._velHorizY ** 2 + this._velHorizZ ** 2);
+      if (spd > maxSpd) {
+        const inv = maxSpd / spd;
+        this._velHorizX *= inv;
+        this._velHorizY *= inv;
+        this._velHorizZ *= inv;
+      }
+    }
 
     // ── Collision per world axis ────────────────────────────────────
-    if (!this._isInsideBuilding(this.pos.x + wmx, this.pos.y, this.pos.z)) this.pos.x += wmx;
-    if (!this._isInsideBuilding(this.pos.x, this.pos.y + wmy, this.pos.z)) this.pos.y += wmy;
-    if (!this._isInsideBuilding(this.pos.x, this.pos.y, this.pos.z + wmz)) this.pos.z += wmz;
+    if (!this._isInsideBuilding(this.pos.x + this._velHorizX, this.pos.y, this.pos.z))
+      this.pos.x += this._velHorizX;
+    if (!this._isInsideBuilding(this.pos.x, this.pos.y + this._velHorizY, this.pos.z))
+      this.pos.y += this._velHorizY;
+    if (!this._isInsideBuilding(this.pos.x, this.pos.y, this.pos.z + this._velHorizZ))
+      this.pos.z += this._velHorizZ;
 
     this._depenetrate();
 
@@ -302,9 +339,6 @@ export class Player {
     }
 
     // ── Gravity & jump ──────────────────────────────────────────────
-    const groundH = this._getGroundHeight();
-    const grounded = this._jumpOffset <= groundH && this._velUp <= 0;
-
     if (jumpPressed && grounded) {
       this._velUp            = JUMP_STRENGTH * (sprint ? 1.6 : 1.0);
       this._jumpedWithSprint = sprint;
