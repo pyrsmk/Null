@@ -268,7 +268,7 @@ export class Player {
     const jumpPressed = keyboard.wasJustPressed('Space') || (gp?.jump ?? false);
     const ePressed    = keyboard.wasJustPressed('KeyE');
 
-    const airSprintBoost = this._jumpedWithSprint ? 1.5 : 1.0;
+    const airSprintBoost = this._jumpedWithSprint ? 1.1 : 1.0;
     const s = CFG.camSpeed * (sprint ? 4 : 1) * airSprintBoost;
 
     // ── Movement in local frame ─────────────────────────────────────
