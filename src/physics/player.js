@@ -2,13 +2,14 @@ import * as THREE from 'three';
 import { CFG } from '../config.js';
 
 const JUMP_STRENGTH      = 2.5;
-const GRAVITY            = 0.08;
+const GRAVITY            = 0.09;
 const CAM_BASE_Y         = 75;
 const BOB_AMPLITUDE      = 1.75;
 const BOB_SPEED          = 0.10;
 const TRANSITION_FRAMES  = 30;
 const GLITCH_FRAMES      = 10;
 const AIR_STEER          = 0.12;
+const MIN_FALL_SPEED     = 0.8;
 
 // Reusable temporaries
 const _yAxis = new THREE.Vector3(0, 1, 0);
@@ -186,7 +187,15 @@ export class Player {
     this.pos.add(this._vel);
 
     // ── Update grounded state (used next frame for input control) ───
-    this._grounded = groundHits.length > 0;
+    const wasGrounded  = this._grounded;
+    this._grounded     = groundHits.length > 0;
+
+    // First frame of free-fall (walked off edge, no jump): apply minimum downward speed
+    if (wasGrounded && !this._grounded && !jumpPressed) {
+      const normalNow = this._vel.dot(worldUp);
+      if (normalNow < 0 && normalNow > -MIN_FALL_SPEED)
+        this._vel.addScaledVector(worldUp, -MIN_FALL_SPEED - normalNow);
+    }
     if (this._grounded) this._jumpedWithSprint = false;
 
     // ── Head bob ────────────────────────────────────────────────────
