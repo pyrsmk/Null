@@ -67,7 +67,7 @@ export class WallFace extends Surface {
     const sd = this._signedDist(pos);
     if (sd > margin) return false;
     if (sd < -margin) return false; // deep penetration, skip
-    if (!this._inBounds(pos)) return false;
+    if (!this._inBounds(pos, margin)) return false;
     const perp = vec.dot(this._normal);
     return perp < 0; // approaching (sd ≥ 0) or penetrating and continuing (sd < 0)
   }

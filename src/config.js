@@ -4,7 +4,7 @@ export const CFG = {
   buildingW : 300,
   buildingH : 5000,
   spacing   : 560,
-  camSpeed  : 1.5,
+  camSpeed  : 1.7,
   fov       : 70,
   near      : 1.0,
   far       : 45 * 560,
