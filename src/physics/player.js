@@ -9,7 +9,7 @@ const BOB_SPEED          = 0.10;
 const TRANSITION_FRAMES  = 20;
 const GLITCH_FRAMES      = 10;
 const AIR_STEER          = 0.12;
-const MIN_FALL_SPEED     = 0.8;
+const MIN_FALL_SPEED     = 1;
 
 // Reusable temporaries
 const _yAxis = new THREE.Vector3(0, 1, 0);
