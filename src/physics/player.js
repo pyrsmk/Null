@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CFG } from '../config.js';
 
-const JUMP_STRENGTH      = 3.1;
+const JUMP_STRENGTH      = 2.5;
 const GRAVITY            = 0.08;
 const CAM_BASE_Y         = 75;
 const BOB_AMPLITUDE      = 1.75;
