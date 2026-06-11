@@ -174,7 +174,8 @@ export class Player {
     const velDown    = Math.max(0, -this._vel.dot(worldUp));
     const feetMargin = CFG.camRadius + velDown;
     const feetPos    = _v2.copy(this.pos).addScaledVector(worldUp, -CAM_BASE_Y);
-    const groundHits = this._world.isCollidingWith(feetPos, this._vel, feetMargin);
+    const groundHits = this._world.isCollidingWith(feetPos, this._vel, feetMargin)
+      .filter(s => s.normal.dot(worldUp) > 0.5);
     for (const s of groundHits) s.alterVelocity(feetPos, this._vel, CFG.camRadius);
 
     // ── Collision : body (lateral obstacles) ───────────────────────
