@@ -6,7 +6,7 @@ On incarne un Agent IA dépêché pour remettre un système en place après une 
 
 ## TODO
 
-- animation quand on atterit
+- saut de base trop court
 - ajouter le saut chargé en appuyant longtemps sur Espace
 - améliorer les soucis de moiré
 - faire en sorte que les objets soient des vraies classes et gèrent leur rendu

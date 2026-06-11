@@ -10,6 +10,9 @@ const TRANSITION_FRAMES  = 20;
 const GLITCH_FRAMES      = 10;
 const AIR_STEER          = 0.12;
 const MIN_FALL_SPEED     = 1;
+const LAND_FRAMES        = 30;
+const LAND_AMPLITUDE     = 40;
+const LAND_MIN_AIR       = 115; // sprint-jump ≈ 89 frames; +26 frames buffer for height variance
 
 // Reusable temporaries
 const _yAxis = new THREE.Vector3(0, 1, 0);
@@ -41,6 +44,11 @@ export class Player {
 
     this._bobPhase    = 0;
     this._bobStrength = 0;
+
+    this._landPhase    = 0;
+    this._landStrength = 0;
+    this._landOffset   = 0;
+    this._airFrames    = 0;
 
     this._transitionFrames    = 0;
     this._transitionTotal     = 0;
@@ -146,16 +154,14 @@ export class Player {
 
     // ── Directional control ─────────────────────────────────────────
     const groundSpeed    = CFG.camSpeed * (sprint ? 4 : 1);
-    const airSprintBoost = this._jumpedWithSprint ? 1.1 : 1.0;
-
     if (this._grounded) {
       // Direct control: replace plane velocity with input
       planeVel.copy(inputDir).multiplyScalar(groundSpeed);
     } else {
       // Air: small steer nudge, clamp to max speed
-      const steer  = CFG.camSpeed * AIR_STEER * airSprintBoost;
+      const steer  = CFG.camSpeed * AIR_STEER;
       planeVel.addScaledVector(inputDir, steer);
-      const maxSpd = CFG.camSpeed * (this._jumpedWithSprint ? 4 : 1) * airSprintBoost;
+      const maxSpd = CFG.camSpeed * (this._jumpedWithSprint ? 4 : 1);
       const spd    = planeVel.length();
       if (spd > maxSpd) planeVel.multiplyScalar(maxSpd / spd);
     }
@@ -198,12 +204,30 @@ export class Player {
     }
     if (this._grounded) this._jumpedWithSprint = false;
 
+    // ── Landing squish ──────────────────────────────────────────────
+    if (this._grounded) {
+      if (!wasGrounded && this._airFrames > LAND_MIN_AIR) {
+        this._landStrength = Math.min(1.0, velDown / (JUMP_STRENGTH * 2.0));
+        this._landPhase    = LAND_FRAMES;
+      }
+      this._airFrames = 0;
+    } else {
+      this._airFrames++;
+    }
+    if (this._landPhase > 0) {
+      this._landPhase--;
+      const t = 1 - this._landPhase / LAND_FRAMES;
+      this._landOffset = -Math.sin(t * Math.PI) * LAND_AMPLITUDE * this._landStrength;
+    } else {
+      this._landOffset = 0;
+    }
+
     // ── Head bob ────────────────────────────────────────────────────
     const moving = lx !== 0 || lz !== 0;
     this._bobStrength = (moving && this._grounded)
       ? Math.min(1, this._bobStrength + 0.06)
       : Math.max(0, this._bobStrength - 0.04);
-    if (this._bobStrength > 0) this._bobPhase += BOB_SPEED * (sprint ? 2.5 : 1);
+    if (this._bobStrength > 0 && this._grounded) this._bobPhase += BOB_SPEED * (sprint ? 2.5 : 1);
     this._bobOffset = Math.sin(this._bobPhase) * BOB_AMPLITUDE * this._bobStrength;
 
     // ── E key: surface transition ───────────────────────────────────
