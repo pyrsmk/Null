@@ -6,12 +6,6 @@ On incarne un Agent IA dépêché pour remettre un système en place après une 
 
 ## TODO
 
-- l'effet trampoline pue la merde
-- c'est pas rare que je tombe sur un coin d'immeuble plutôt qu'une surface, et du coup je ne peux pas en bouger latéralement sans sauter
-- quand on est sur le bord d'un toit, on peut pas bouger latéralement, on doit nécessairement sauter
-- c'est pas rare que quand je saute je tombe sur le bord d'un toit, et je ne peux pas en bouger non plus facilement
-- le saut marcher très mal sur le bord d'un toit
-
 - on devrait pouvoir se projeter aussi sur la surface où l'on est
 - il faut que le landing indicator se cale bien par rapport à toutes les orientations de surface
 - on affiche plutôt un pointeur laser

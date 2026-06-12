@@ -68,54 +68,77 @@ These rules govern how the engine is designed. They take priority over implement
 2. **A `Surface` is a 2D physical boundary, not a solid volume.** A wall, a floor, a roof are all
    `Surface` instances. The physics engine does not distinguish between them.
 
-3. **Surfaces block in both directions.** A surface has no "accessible side". The normal is used
-   only to decompose velocity and to orient the player during a transition (E key).
+3. **Surfaces block in both directions.** A surface has no "accessible side". The face normal is
+   used only to orient the player during a transition (E key).
 
-4. **`alterVelocity` is the primary mechanism for constraining movement.** Lateral and wall
-   collisions only modify `vel`, never `pos` directly. Two controlled exceptions exist where
-   `pos` is snapped directly:
-   - **Position-correction pass** (pre-collision): iterative snap via `nearbySurfaces` to
-     prevent the player from sinking through horizontal surfaces at building-floor borders.
-   - **Ground-height snap** (post-`alterVelocity`): after a ground hit detected via swept
-     margin, `pos` is adjusted so feet are at exactly `camRadius` from the surface. Without
-     this, `_grounded` turns false the next frame (swept `feetMargin` shrinks back to
-     `camRadius`, and `sd_feet > camRadius` → not approaching → can't jump).
-   Deep lateral penetration is recovered through the depenetration impulse in `alterVelocity`
-   (`vel -= sd * normal` when `sd < 0`).
+4. **Collision is sphere-vs-bounded-rectangle, expressed as a `Contact`.** The contact normal is
+   a property of the *contact*, not of the surface: facing the interior of a face it equals the
+   face normal; near an edge or corner it tilts toward the player (direction from the closest
+   point on the bounded face to the player). `Contact.dist` is the generalized signed distance:
+   plane signed distance when the player projects inside the face bounds (negative =
+   penetration), distance to the closest point on the face otherwise (always ≥ 0 — an edge
+   cannot be penetrated from behind). Bounds are **never** expanded by the margin: a face claims
+   no space beyond its physical edges. This is what makes roof edges and building corners walkable.
 
-5. **The player's volume is a property of the player, not of surfaces.** `camRadius` is passed
-   as `margin` to `isCollidingWith` and `alterVelocity`. Surfaces do not hardcode it.
+5. **`Contact.alterVelocity(vel, restDist = dist)` is the primary mechanism for constraining
+   movement.** It clamps the inbound velocity component along the contact normal so the caller
+   arrives at `restDist` from the surface and no closer (default: stop at the current distance =
+   kill all inbound velocity). It **never adds outbound velocity** — there is no depenetration
+   impulse; converting penetration depth into kinetic energy is forbidden (trampoline effect).
+   Penetration recovery is always positional. Collisions modify `vel`, never `pos` directly.
+   Three controlled exceptions snap `pos` along the **contact normal**:
+   - **Lateral-at-feet snap**: lateral contacts at the feet push `pos` out to `camRadius`
+     (position only, no velocity change — avoids bounce).
+   - **Ground-height snap** (post-`alterVelocity`): `pos` is adjusted so feet sit at exactly
+     `camRadius` from the ground contact (re-measured via `surface.measure()` after lateral
+     snaps). On an edge contact the normal is tilted → the camera lowers when overhanging.
+     Without this snap, `_grounded` turns false the next frame (swept `feetMargin` shrinks back
+     to `camRadius` → not approaching → can't jump).
+   - **Body invariant guard**: body contacts closer than `camRadius` push `pos` out to
+     `camRadius` (position only). Must never fire in normal motion — it covers paths that move
+     `pos` without collision checks (transition lerp, projection flight) and multi-contact
+     corner residue. If it fires regularly, the bug is upstream.
 
-6. **Adding an obstacle = instantiate a `WallFace`, register it in `World`. Nothing else.**
+6. **The player's volume is a property of the player, not of surfaces.** `camRadius` is passed
+   as `margin` to `isCollidingWith`. Surfaces do not hardcode it.
+
+7. **Adding an obstacle = instantiate a `WallFace`, register it in `World`. Nothing else.**
    Zero changes to `player.js` or any physics logic.
 
 ### Collision queries
 
-7. **`World.isCollidingWith(pos, vec, margin)` is the single entry point for collision.**
-   It returns only the surfaces that `pos` is approaching (within `margin`, in direction `vec`).
-   The player calls it — `World` has no knowledge of feet, body, or camera height.
+8. **`World.isCollidingWith(pos, vec, margin)` is the single entry point for collision.**
+   It returns the `Contact`s of all surfaces the sphere `(pos, margin)` moving along `vec`
+   collides with. The player calls it — `World` has no knowledge of feet, body, or camera height.
+   **Contacts are transient**: each `WallFace` owns one reusable `Contact`, valid only until that
+   face's next query. Consume immediately or copy.
 
-8. **The player makes two collision queries per frame:**
+9. **The player makes two collision queries per frame:**
    - **Feet** `(feetPos = pos - worldUp × CAM_BASE_Y)` — detects ground support.
      Margin is swept: `CFG.camRadius + max(0, -vel·worldUp)` so fast falls never tunnel.
-   - **Body** `(pos)` — detects lateral obstacles. Margin = `CFG.camRadius`.
+   - **Body** `(pos)` — detects lateral obstacles. Margin is swept: `CFG.camRadius + |vel|`
+     so a fast approach is detected before crossing; `alterVelocity(vel, camRadius)` then clamps
+     the approach to land flush at `camRadius` — penetration never happens in normal motion.
    This separation is the player's responsibility. `World` and surfaces are unaware of it.
+   Feet contacts are classified by the **contact** normal: ground if `normal·worldUp > 0.5`,
+   lateral otherwise. An edge contact migrates from ground to lateral as it tilts.
 
-9. **`_grounded` is re-derived from collision results every frame and stored for the next frame.**
-   `_grounded = isCollidingWith(feetPos, vel, feetMargin).length > 0`.
-   It is never assumed — only carried forward one frame for input/control decisions.
+10. **`_grounded` is re-derived from collision results every frame and stored for the next frame.**
+    `_grounded = groundContacts.length > 0`.
+    It is never assumed — only carried forward one frame for input/control decisions.
 
-10. **The player's volume applies below the feet too.** Feet stop at `camRadius` from any surface,
+11. **The player's volume applies below the feet too.** Feet stop at `camRadius` from any surface,
     consistent with lateral collision. The camera sits at `CAM_BASE_Y + camRadius` above the floor
-    when standing.
+    when standing. On a roof edge the feet sphere can rest in partial overhang (held by the edge
+    contact, camera slightly lowered).
 
 ### Physics model
 
-11. **Single unified velocity `_vel: THREE.Vector3`.** No separate horizontal/vertical components.
+12. **Single unified velocity `_vel: THREE.Vector3`.** No separate horizontal/vertical components.
     Decomposed each frame into normal (worldUp axis) and plane (surface-tangent) components for
     gravity and input control, then recombined before collision queries.
 
-12. **`worldRotation` is the surface frame.** A single quaternion maps player-local axes to world
+13. **`worldRotation` is the surface frame.** A single quaternion maps player-local axes to world
     axes. On floor: identity. On a wall: local Y → wall normal. `yaw` and `pitch` are never
     modified by surface transitions.
 
@@ -157,18 +180,27 @@ requestAnimationFrame
 
 ### Collision (`src/physics/world.js`)
 
+- **`Contact`** — result of a sphere-vs-surface query: `{surface, normal, point, dist}`.
+  `normal` = face normal inside the bounds, tilted toward the player near an edge/corner.
+  `point` = closest point on the bounded face. `dist` = generalized signed distance (plane sd
+  inside bounds, may be < 0 = penetration; distance to closest point outside, always ≥ 0).
+  Method `alterVelocity(vel, restDist = dist)` — clamps the inbound component so the caller
+  arrives flush at `restDist` (default: kills all inbound velocity); never adds outbound velocity.
 - **`WorldObject`** — abstract base for all world entities.
-- **`Surface extends WorldObject`** — abstract physical boundary. Method `alterVelocity(pos, vel, margin)`.
+- **`Surface extends WorldObject`** — abstract physical boundary.
+  Method `contactWith(pos, vec, margin)` → transient `Contact` or `null`.
 - **`WallFace extends Surface`** — rectangular face: `(nx,ny,nz, offset, u0,u1, v0,v1)`.
   `offset = dot(anyPointOnFace, normal)`. Tangent axes pre-computed from normal for 2D bounds.
-- **`_isApproaching(pos, vec, margin)`** — internal check used by `World.isCollidingWith`.
-  Skips if `signedDist < -margin` (deep penetration already handled by depenetration impulse).
+  Owns **one reusable `Contact`** — query results are transient (valid until the face's next query).
+- **`WallFace.measure(pos, out)`** — fills `out` with closest-feature data (dist, normal, point),
+  no approach/margin check. Used by `contactWith` and by the player's ground-height snap.
+- **`WallFace.contactWith(pos, vec, margin)`** — quick plane rejection (`|sd| > margin`), then
+  `measure`; collides if `dist ≤ margin` and (penetrating, or `vec` approaches the contact normal).
+  Bounds are strict — no margin expansion along the tangents.
 - **Floor surface** — `WallFace(0,1,0, 0, -far,far, -far,far)`, registered via `addGlobal`.
   Finite bounds: the player falls into the void beyond the floor edge.
 - **`WallFace.signedDist(pos)`** — public wrapper around `_signedDist`; positive = on normal side.
 - **`World`** — spatial grid `"col,row"` → 3×3 neighbourhood queries + global list.
-- **`World.nearbySurfaces(pos, normalMargin)`** — returns WallFaces within lateral `camRadius`
-  and `sd ∈ (-camRadius, normalMargin)` of `pos`; used by position-correction pass (no velocity check).
 - **`findTransitionCandidate(pos, worldUp, maxDist)`** — nearest surface with normal diverging
   ≥45° from `worldUp`, on whose normal side the player stands.
 - `main.js` builds the world: 4 lateral `WallFace`s + 1 roof per building in their grid cell.
@@ -178,22 +210,29 @@ requestAnimationFrame
 - No Rapier yet — fully hand-rolled
 - **"World rotates" model:** `worldRotation` quaternion maps local Y → current surface normal.
 - **Each frame:** decompose `_vel` → apply gravity to normal component → apply input to plane
-  component → recombine → **position-correction pass** → two `isCollidingWith` queries →
-  `alterVelocity` on hits → **ground-height snap** → `pos += _vel`.
-- **Position-correction pass:** iterative loop (max 5) via `nearbySurfaces(pos, CAM_BASE_Y + camRadius)`.
-  For each horizontal surface where `sd ∈ (0, HMARGIN)` (camera above, feet too close):
-  snap `pos += (HMARGIN - sd) * normal` so feet land at `camRadius` from surface.
-  If 5 iterations don't converge → revert `pos` to pre-pass value (`_posPrev`).
-  Lateral surfaces are untouched here; `alterVelocity` handles them.
-- **Ground-height snap:** after `alterVelocity` on ground hits (before `pos += _vel`),
-  `pos` is snapped so feet are at exactly `camRadius` from `groundHits[0]`.
-  Fixes the case where the player lands from a fast fall: swept `feetMargin` detects
-  the ground while `pos` is still above standing height; the snap normalises `pos` so
+  component → recombine → feet query → ground contacts `alterVelocity` → **lateral-at-feet
+  snap** → **ground-height snap** → body query (swept margin `camRadius + |vel|`) →
+  `alterVelocity(vel, camRadius)` clamp + positional invariant guard on body contacts →
+  `pos += _vel`.
+- **Feet contact classification:** ground if `contact.normal·worldUp > 0.5`, lateral otherwise.
+  Edge contacts have tilted normals, so a roof-edge contact stays "ground" up to ~60° of tilt.
+- **Lateral-at-feet snap:** lateral contacts with `dist < camRadius` push `pos` out along the
+  contact normal (position only, no velocity change — avoids bounce).
+- **Ground-height snap:** after `alterVelocity` on ground contacts (before `pos += _vel`),
+  `pos` is snapped so feet are at exactly `camRadius` from the ground contact, along the
+  **contact normal** — re-measured via `surface.measure()` because the lateral snaps may have
+  moved `feetPos`. Fixes the case where the player lands from a fast fall: swept `feetMargin`
+  detects the ground while `pos` is still above standing height; the snap normalises `pos` so
   the next frame's unswept detection (`feetMargin = camRadius`) still finds the surface.
+  On an edge contact the tilted normal makes the camera lower smoothly in partial overhang.
 - **Jump:** impulse `JUMP_HEIGHT` (base) or `JUMP_HEIGHT_SPRINT` (sprint) added to normal component when grounded.
   `_jumpedWithSprint` is set at jump time and tracked until landing.
 - **Sprint:** 4× ground speed. Airborne: `_jumpedWithSprint` preserves 4× max speed cap and
   `1.1×` steer multiplier; a non-sprint jump caps at base speed with no boost.
+- **Walk-off inertia:** leaving the ground without a jump (walked off an edge) transfers the
+  current plane speed into `_airMaxSpeed`, so ground momentum (incl. sprint) carries into the
+  fall arc. Without this the air cap crushes plane speed back to base and the arc dies at
+  the edge.
 - **Head bob:** sinusoidal on `_bobStrength`, disabled airborne, 2.5× speed sprinting.
 - **Surface transition (E key):** zero-G freeze → `_activateSurface()` rotates `worldRotation`,
   zeroes `_vel`.

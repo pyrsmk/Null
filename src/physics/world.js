@@ -1,14 +1,51 @@
 import * as THREE from 'three';
 import { CFG, totalW, totalD } from '../config.js';
 
+// ── Contact ────────────────────────────────────────────────────────
+// Result of a sphere-vs-surface query. The normal is a property of the
+// CONTACT, not of the surface: facing the interior of a face it equals
+// the face normal, but near an edge or corner it tilts toward the player
+// (direction from the closest point on the bounded face to the player).
+//
+// `dist` is the generalized signed distance:
+//   - player projects inside the face bounds → plane signed distance
+//     (negative = penetration)
+//   - player projects outside the bounds → distance to the closest point
+//     on the face (always ≥ 0; an edge cannot be penetrated from behind)
+//
+// Each WallFace owns one reusable Contact: the data is TRANSIENT, valid
+// only until that face's next query. Callers must consume it immediately
+// (or copy what they need).
+
+export class Contact {
+  constructor() {
+    this.surface = null;
+    this.normal  = new THREE.Vector3();
+    this.point   = new THREE.Vector3(); // closest point on the bounded face
+    this.dist    = 0;
+  }
+
+  // Clamps the inbound velocity component along the contact normal so the
+  // caller arrives at `restDist` from the surface and no closer. Without
+  // restDist, kills all inbound velocity (stop at the current distance).
+  // NEVER adds outbound velocity: penetration recovery is positional and
+  // owned by the caller — injecting it as kinetic energy causes trampolines.
+  alterVelocity(vel, restDist = this.dist) {
+    const gap  = Math.max(0, this.dist - restDist);
+    const perp = vel.dot(this.normal);
+    if (perp >= -gap) return; // not approaching beyond the allowed gap
+    vel.addScaledVector(this.normal, -(perp + gap));
+  }
+}
+
 // ── Base classes ───────────────────────────────────────────────────
 
 export class WorldObject {}
 
 export class Surface extends WorldObject {
-  // Modifies vel in-place to prevent penetration.
-  // Only called on surfaces returned by World.isCollidingWith().
-  alterVelocity(_pos, _vel, _margin) {}
+  // Returns a transient Contact if the sphere (pos, margin) moving along
+  // vec collides with this surface, null otherwise.
+  contactWith(_pos, _vec, _margin) { return null; }
 
   // Returns the surface normal (used for transition orientation only).
   get normal() { return null; }
@@ -43,6 +80,8 @@ export class WallFace extends Surface {
       this._tU = new THREE.Vector3(1, 0, 0);
       this._tV = new THREE.Vector3(0, 1, 0);
     }
+
+    this._contact = new Contact();
   }
 
   get normal() { return this._normal; }
@@ -53,47 +92,63 @@ export class WallFace extends Surface {
     return pos.dot(this._normal) - this._offset;
   }
 
-  // Is pos within the face's 2D bounds (with optional margin)?
-  _inBounds(pos, margin = 0) {
+  // Is pos within the face's 2D bounds?
+  _inBounds(pos) {
     const u = pos.dot(this._tU);
     const v = pos.dot(this._tV);
-    return u >= this._u0 - margin && u <= this._u1 + margin
-        && v >= this._v0 - margin && v <= this._v1 + margin;
+    return u >= this._u0 && u <= this._u1
+        && v >= this._v0 && v <= this._v1;
   }
 
-  // Returns true if pos is within margin of this face AND vec is approaching it,
-  // OR if pos has already penetrated (sd < 0) and is still going inward.
-  _isApproaching(pos, vec, margin) {
+  // Fills `out` with closest-feature data for pos (no approach/margin check):
+  // generalized signed distance, contact normal, closest point on the face.
+  measure(pos, out) {
     const sd = this._signedDist(pos);
-    if (sd > margin) return false;
-    if (sd < -margin) return false; // deep penetration, skip
-    if (!this._inBounds(pos, margin)) return false;
-    if (sd < 0) return true; // already penetrating → eject unconditionally
-    return vec.dot(this._normal) < 0;
-  }
+    const u  = pos.dot(this._tU);
+    const v  = pos.dot(this._tV);
+    const du = u - Math.min(Math.max(u, this._u0), this._u1);
+    const dv = v - Math.min(Math.max(v, this._v0), this._v1);
 
-  alterVelocity(pos, vel, _margin) {
-    const perp = vel.dot(this._normal);
-    if (perp >= 0) return; // not approaching (safety check after multi-surface resolution)
-    vel.x -= perp * this._normal.x;
-    vel.y -= perp * this._normal.y;
-    vel.z -= perp * this._normal.z;
-    // If already penetrating, add a depenetration impulse to recover position
-    const sd = this._signedDist(pos);
-    if (sd < 0) {
-      vel.x -= sd * this._normal.x; // sd negative → pushes outward
-      vel.y -= sd * this._normal.y;
-      vel.z -= sd * this._normal.z;
+    out.surface = this;
+    out.point.copy(pos)
+      .addScaledVector(this._normal, -sd)
+      .addScaledVector(this._tU, -du)
+      .addScaledVector(this._tV, -dv);
+
+    if (du === 0 && dv === 0) {
+      // Inside bounds: plane contact (dist may be negative = penetration)
+      out.dist = sd;
+      out.normal.copy(this._normal);
+    } else {
+      // Edge/corner region: contact normal points from the closest point
+      // on the face toward the player
+      out.dist = Math.sqrt(sd * sd + du * du + dv * dv);
+      if (out.dist > 1e-6) {
+        out.normal.copy(this._normal).multiplyScalar(sd / out.dist)
+          .addScaledVector(this._tU, du / out.dist)
+          .addScaledVector(this._tV, dv / out.dist);
+      } else {
+        out.normal.copy(this._normal);
+      }
     }
+    return out;
+  }
+
+  // Returns the face's transient Contact if the sphere (pos, margin) moving
+  // along vec collides with it, null otherwise. Penetration (inside bounds,
+  // dist < 0) collides unconditionally; otherwise vec must approach the
+  // contact. Deep penetration (dist < -margin) is skipped.
+  contactWith(pos, vec, margin) {
+    const sd = this._signedDist(pos);
+    if (sd > margin || sd < -margin) return null; // quick plane rejection
+    const c = this.measure(pos, this._contact);
+    if (c.dist > margin) return null; // outside bounds, too far from the edge
+    if (c.dist >= 0 && vec.dot(c.normal) >= 0) return null; // not approaching
+    return c;
   }
 
   // Public signed distance (positive = on normal side).
   signedDist(pos) { return this._signedDist(pos); }
-
-  // Perpendicular distance from pos to face plane — used for transition ranking.
-  distanceTo(pos) {
-    return Math.abs(this._signedDist(pos));
-  }
 }
 
 // ── World ──────────────────────────────────────────────────────────
@@ -135,13 +190,17 @@ export class World {
     return result;
   }
 
-  // Returns Surface instances that pos is approaching (within margin, in direction vec).
-  // The caller (player) decides what position to use: camera pos for body, feet for ground.
+  // Returns the Contacts of all surfaces the sphere (pos, margin) moving along
+  // vec collides with. The caller (player) decides what position to use:
+  // camera pos for body, feet for ground. Contacts are transient — valid only
+  // until the owning surface's next query.
   isCollidingWith(pos, vec, margin) {
     const result = [];
     for (const obj of this._nearby(pos.x, pos.z)) {
-      if (obj instanceof WallFace && obj._isApproaching(pos, vec, margin))
-        result.push(obj);
+      if (obj instanceof WallFace) {
+        const c = obj.contactWith(pos, vec, margin);
+        if (c) result.push(c);
+      }
     }
     return result;
   }

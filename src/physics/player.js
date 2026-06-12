@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CFG } from '../config.js';
+import { Contact } from './world.js';
 
 const JUMP_HEIGHT          = 3.5;
 const JUMP_HEIGHT_SPRINT   = 7.0;
@@ -21,6 +22,7 @@ const _v2    = new THREE.Vector3();
 const _v3    = new THREE.Vector3();
 const _q1    = new THREE.Quaternion();
 const _q2    = new THREE.Quaternion();
+const _scratchContact = new Contact();
 
 // Reusable temporaries for landing prediction (isolated from update() temps)
 const _predPos  = new THREE.Vector3();
@@ -224,31 +226,42 @@ export class Player {
     const velDown    = Math.max(0, -this._vel.dot(worldUp));
     const feetMargin = CFG.camRadius + velDown;
     const feetPos    = _v2.copy(this.pos).addScaledVector(worldUp, -CAM_BASE_Y);
-    const feetHits   = this._world.isCollidingWith(feetPos, this._vel, feetMargin);
-    const groundHits        = feetHits.filter(s =>  s.normal.dot(worldUp) > 0.5);
-    const lateralHitsAtFeet = feetHits.filter(s =>  s.normal.dot(worldUp) <= 0.5);
-    for (const s of groundHits) s.alterVelocity(feetPos, this._vel, CFG.camRadius);
-    // Lateral surfaces at feet: snap position only, no velocity change (avoids bounce)
-    for (const s of lateralHitsAtFeet) {
-      const sd = s.signedDist(feetPos);
-      if (sd < CFG.camRadius) {
-        const push = CFG.camRadius - sd;
-        this.pos.addScaledVector(s.normal, push);
-        feetPos.addScaledVector(s.normal, push);
+    const feetContacts    = this._world.isCollidingWith(feetPos, this._vel, feetMargin);
+    const groundContacts  = feetContacts.filter(c => c.normal.dot(worldUp) > 0.5);
+    const lateralContacts = feetContacts.filter(c => c.normal.dot(worldUp) <= 0.5);
+    for (const c of groundContacts) c.alterVelocity(this._vel);
+    // Lateral contacts at feet: snap position only, no velocity change (avoids bounce)
+    for (const c of lateralContacts) {
+      if (c.dist < CFG.camRadius) {
+        const push = CFG.camRadius - c.dist;
+        this.pos.addScaledVector(c.normal, push);
+        feetPos.addScaledVector(c.normal, push);
       }
     }
-    // Snap to exact standing height when grounded. The swept feetMargin can detect
-    // the ground while the player is still above the correct standing height; without
-    // this snap, _grounded turns false the very next frame (feetMargin shrinks back
-    // to camRadius and sd_feet > camRadius → not approaching → can't jump).
-    if (groundHits.length > 0) {
-      const sdFeet = groundHits[0].signedDist(feetPos);
-      this.pos.addScaledVector(groundHits[0].normal, CFG.camRadius - sdFeet);
+    // Snap so feet sit at exactly camRadius from the ground contact, along the
+    // contact normal (tilted on an edge → the camera lowers when overhanging).
+    // The swept feetMargin can detect the ground while the player is still above
+    // standing height; without this snap, _grounded turns false the very next
+    // frame (feetMargin shrinks back to camRadius → not approaching → can't jump).
+    // Re-measured because the lateral snaps above may have moved feetPos.
+    if (groundContacts.length > 0) {
+      const c = groundContacts[0].surface.measure(feetPos, _scratchContact);
+      this.pos.addScaledVector(c.normal, CFG.camRadius - c.dist);
     }
 
     // ── Collision : body (lateral obstacles) ───────────────────────
-    for (const s of this._world.isCollidingWith(this.pos, this._vel, CFG.camRadius))
-      s.alterVelocity(this.pos, this._vel, CFG.camRadius);
+    // Swept margin (like the feet): detection expands with speed so a fast
+    // approach is seen before crossing, and the velocity is clamped to land
+    // flush at camRadius — penetration never happens in normal motion.
+    const bodyMargin = CFG.camRadius + this._vel.length();
+    for (const c of this._world.isCollidingWith(this.pos, this._vel, bodyMargin)) {
+      c.alterVelocity(this._vel, CFG.camRadius);
+      // Invariant guard: if pos is already closer than camRadius (teleport
+      // paths, multi-contact corner residue), push it out positionally —
+      // never through velocity. Should not fire in normal motion.
+      if (c.dist < CFG.camRadius)
+        this.pos.addScaledVector(c.normal, CFG.camRadius - c.dist);
+    }
 
     // ── Move ────────────────────────────────────────────────────────
     const preMoveH = this.pos.dot(worldUp) - CAM_BASE_Y;
@@ -256,14 +269,18 @@ export class Player {
 
     // ── Update grounded state (used next frame for input control) ───
     const wasGrounded  = this._grounded;
-    this._grounded     = groundHits.length > 0;
+    this._grounded     = groundContacts.length > 0;
 
     if (wasGrounded && !this._grounded)
       this._launchFeetDotUp = preMoveH;
 
-    // First frame of free-fall (walked off edge, no jump): apply minimum downward speed
+    // First frame of free-fall (walked off edge, no jump): carry the ground
+    // momentum into the air speed cap — without this the cap crushes plane
+    // speed back to base and the arc dies at the edge — then apply minimum
+    // downward speed.
     if (wasGrounded && !this._grounded && !jumpPressed) {
       const normalNow = this._vel.dot(worldUp);
+      this._airMaxSpeed = Math.sqrt(Math.max(0, this._vel.lengthSq() - normalNow * normalNow));
       if (normalNow < 0 && normalNow > -MIN_FALL_SPEED)
         this._vel.addScaledVector(worldUp, -MIN_FALL_SPEED - normalNow);
     }
@@ -358,13 +375,12 @@ export class Player {
 
       // Lateral surface above the feet plane → show on wall
       if (feetH > feetDotUp) {
-        const bodyHits = this._world.isCollidingWith(_predPos, _predVel, CFG.camRadius)
-          .filter(s => s.normal.dot(_predUp) <= 0.5);
-        if (bodyHits.length > 0) {
-          const sd = bodyHits[0].signedDist(_predPos);
+        const bodyContacts = this._world.isCollidingWith(_predPos, _predVel, CFG.camRadius)
+          .filter(c => c.normal.dot(_predUp) <= 0.5);
+        if (bodyContacts.length > 0) {
           return {
-            surfacePos: _predPos.clone().addScaledVector(bodyHits[0].normal, -sd),
-            normal: bodyHits[0].normal.clone(),
+            surfacePos: bodyContacts[0].point.clone(),
+            normal: bodyContacts[0].normal.clone(),
           };
         }
       }
