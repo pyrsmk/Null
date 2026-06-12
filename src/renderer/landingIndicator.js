@@ -1,8 +1,12 @@
 import * as THREE from 'three';
+import { hexToRGB } from '../helpers.js';
 
+const IND_COLOR            = '#FF3F7F';
+const IND_COLOR_RGB        = hexToRGB(IND_COLOR);
 const IND_BASE             = 16;
 const IND_RING_RADIUS      = 40;
-const FLASH_DUR            = 0.5; // seconds
+const FLASH_DUR            = 0.5;  // seconds
+const IND_FADEIN_DUR       = 0.25; // seconds — fade-in duration when indicator first appears
 const IND_ALPHA_RING       = 0.20; // base alpha of the ring cubes
 const IND_ALPHA_RING_PULSE = 0.20; // pulse amplitude
 
@@ -54,8 +58,9 @@ void main() {
     this._mesh.frustumCulled = false;
     this._mesh.visible = false;
 
-    this._target   = null; // { surfacePos, normal } — set each frame during sprint-jump
-    this._flashEnd = -1;   // performance.now() timestamp when flash expires
+    this._target      = null; // { surfacePos, normal } — set each frame during sprint-jump
+    this._flashEnd    = -1;   // performance.now() timestamp when flash expires
+    this._fadeInStart = -1;   // performance.now() timestamp when indicator first appeared
     this._flashPos = new THREE.Vector3();
     this._flashN   = new THREE.Vector3();
   }
@@ -65,9 +70,13 @@ void main() {
   // Called by Player each frame while sprint-jumping airborne. Pass null to clear.
   setTarget(surfacePos, normal) {
     if (surfacePos === null) {
-      this._target = null;
+      this._target      = null;
+      this._fadeInStart = -1;
     } else {
-      if (!this._target) this._target = { surfacePos: new THREE.Vector3(), normal: new THREE.Vector3() };
+      if (!this._target) {
+        this._target      = { surfacePos: new THREE.Vector3(), normal: new THREE.Vector3() };
+        this._fadeInStart = performance.now();
+      }
       this._target.surfacePos.copy(surfacePos);
       this._target.normal.copy(normal);
     }
@@ -94,7 +103,10 @@ void main() {
     const t       = now / 1000;
     const surfPos = this._target ? this._target.surfacePos : this._flashPos;
     const N       = this._target ? this._target.normal     : this._flashN;
-    const alpha   = this._target ? 1.0 : flashFade;
+    const fadeIn  = this._target
+      ? Math.min(1, (now - this._fadeInStart) / (IND_FADEIN_DUR * 1000))
+      : 1.0;
+    const alpha   = this._target ? fadeIn : flashFade;
 
     // Tangent frame around surface normal
     _tmp.set(Math.abs(N.y) < 0.9 ? 0 : 1, Math.abs(N.y) < 0.9 ? 1 : 0, 0);
@@ -115,7 +127,7 @@ void main() {
       _m.compose(_pos, _q, _s);
       this._mesh.setMatrixAt(i, _m);
       const b = (IND_ALPHA_RING + IND_ALPHA_RING_PULSE * Math.sin(t * 3.0 + i * 0.5)) * alpha;
-      this._mesh.setColorAt(i, _color.setRGB(0, b, b));
+      this._mesh.setColorAt(i, _color.setRGB(IND_COLOR_RGB.r * b, IND_COLOR_RGB.g * b, IND_COLOR_RGB.b * b));
     }
 
     this._mesh.instanceMatrix.needsUpdate = true;

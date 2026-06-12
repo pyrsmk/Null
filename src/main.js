@@ -103,7 +103,7 @@ function loop(now) {
   player.update(keyboard, gp);
   keyboard.clearJustPressed();
 
-  camera.position.copy(player.pos).addScaledVector(player.getWorldUp(_loopWU), player._bobOffset + player._landOffset);
+  camera.position.copy(player.pos).addScaledVector(player.getWorldUp(_loopWU), player._bobOffset);
   player.getCameraQuaternion(camera.quaternion);
   camera.updateMatrixWorld();
 

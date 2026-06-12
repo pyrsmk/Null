@@ -12,9 +12,6 @@ const TRANSITION_FRAMES    = 20;
 const GLITCH_FRAMES        = 10;
 const AIR_STEER            = 0.12;
 const MIN_FALL_SPEED       = 1;
-const LAND_FRAMES          = 30;
-const LAND_AMPLITUDE       = 40;
-const LAND_MIN_AIR         = 115; // sprint-jump ≈ 89 frames; +26 frames buffer for height variance
 
 // Reusable temporaries
 const _yAxis = new THREE.Vector3(0, 1, 0);
@@ -56,10 +53,6 @@ export class Player {
     this._bobPhase    = 0;
     this._bobStrength = 0;
 
-    this._landPhase    = 0;
-    this._landStrength = 0;
-    this._landOffset   = 0;
-    this._airFrames    = 0;
 
     this._transitionFrames    = 0;
     this._transitionTotal     = 0;
@@ -248,23 +241,6 @@ export class Player {
 
     if (this._grounded) this._jumpedWithSprint = false;
 
-    // ── Landing squish ──────────────────────────────────────────────
-    if (this._grounded) {
-      if (!wasGrounded && this._airFrames > LAND_MIN_AIR) {
-        this._landStrength = Math.min(1.0, velDown / (JUMP_HEIGHT * 2.0));
-        this._landPhase    = LAND_FRAMES;
-      }
-      this._airFrames = 0;
-    } else {
-      this._airFrames++;
-    }
-    if (this._landPhase > 0) {
-      this._landPhase--;
-      const t = 1 - this._landPhase / LAND_FRAMES;
-      this._landOffset = -Math.sin(t * Math.PI) * LAND_AMPLITUDE * this._landStrength;
-    } else {
-      this._landOffset = 0;
-    }
 
     // ── Head bob ────────────────────────────────────────────────────
     const moving = lx !== 0 || lz !== 0;

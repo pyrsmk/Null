@@ -11,7 +11,6 @@ On incarne un Agent IA dépêché pour remettre un système en place après une 
 - quand on est sur le bord d'un toit, on peut pas bouger latéralement, on doit nécessairement sauter
 - c'est pas rare que quand je saute je tombe sur le bord d'un toit, et je ne peux pas en bouger non plus facilement
 - le saut marcher très mal sur le bord d'un toit
-- l'animation d'aterrissage est naze
 - la touche E affiche aussi un indicateur
 - la touche E nous propulse directement vers la surface
 - ajouter le saut chargé en appuyant longtemps sur Espace
