@@ -116,18 +116,7 @@ function loop(now) {
   sceneMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
   sceneMaterial.uniforms.uTime.value = now / 1000;
 
-  const vel = Math.abs(player.x   - taa.prevX)
-            + Math.abs(player.y   - taa.prevY)
-            + Math.abs(player.z   - taa.prevZ)
-            + Math.abs(player.yaw   - taa.prevYaw)   * 30
-            + Math.abs(player.pitch - taa.prevPitch) * 30;
-  taa.prevX     = player.x;
-  taa.prevY     = player.y;
-  taa.prevZ     = player.z;
-  taa.prevYaw   = player.yaw;
-  taa.prevPitch = player.pitch;
-
-  const { jx, jy } = taa.computeJitter(vel, renderer.domElement.width, renderer.domElement.height);
+  const { jx, jy } = taa.computeJitter(renderer.domElement.width, renderer.domElement.height);
   sceneMaterial.uniforms.uJitter.value.set(jx, jy);
 
   const su = starSystem.material.uniforms;
@@ -137,7 +126,7 @@ function loop(now) {
   su.uTime.value = now / 1000;
 
   renderer.autoClear = true;
-  taa.render(renderer, scene, camera, vel, player.glitchStrength);
+  taa.render(renderer, scene, camera, player.glitchStrength);
 
   fpsAccum += now - fpsLast;
   fpsLast   = now;

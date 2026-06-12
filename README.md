@@ -12,7 +12,6 @@ On incarne un Agent IA dépêché pour remettre un système en place après une 
 - ajouter le ralentissement du temps dès qu'on appuie sur E (on passe tout en niveau de gris)
 - ajouter le saut chargé en appuyant longtemps sur Espace
 
-- améliorer les soucis de moiré
 - faire en sorte que les objets soient des vraies classes et gèrent leur rendu
 - fichier de conf keyboard.json + mouse.json (pour le moment vide)
 - prendre en charge la manette + controller.json

@@ -41,12 +41,12 @@ src/
   renderer/
     fontTexture.js              # Canvas-drawn glyphs '0'/'1' → THREE.CanvasTexture
     materials.js                # RawShaderMaterial factory (scene shaders + uniforms)
-    taaPass.js                  # MSAA render target → TAA resolve (ping-pong) → blit
+    taaPass.js                  # MSAA target (+depth texture) → reprojected TAA resolve (ping-pong) → blit
     shaders/
       scene.vert.glsl           # MVP + TAA jitter applied in clip space
       scene.frag.glsl           # Binary-digit wall rendering + Tron-grid floor
       taa.vert.glsl             # Full-screen quad (NDC)
-      taa.frag.glsl             # Temporal blend with velocity-adaptive alpha
+      taa.frag.glsl             # Temporal blend, depth-reprojected history, velocity-adaptive alpha
       star.vert.glsl            # Rotation-only view (no parallax) + push to far plane for skybox depth trick
       star.frag.glsl            # Simple glow + core disc; additive blending
   world/
@@ -155,11 +155,13 @@ requestAnimationFrame
   ├── keyboard.clearJustPressed()
   ├── camera sync: position + player.getCameraQuaternion(camera.quaternion)
   ├── uniform update (uView, uProjection, uTime, uJitter)
-  ├── taa.computeJitter(vel, w, h)       // Halton(2,3), frozen when still
+  ├── taa.computeJitter(w, h)            // Halton(2,3), always active (incl. when still)
   ├── starSystem uniforms update
-  └── taa.render(renderer, scene, camera, vel, glitchStrength)
-        ├── Pass 1: scene → MSAA target (4× samples)
-        ├── Pass 2: TAA resolve → current ping-pong buffer
+  └── taa.render(renderer, scene, camera, glitchStrength)
+        // motion measured internally on the real camera (velT = position delta,
+        // velR = quaternion angle) — covers head bob + surface transitions
+        ├── Pass 1: scene → MSAA target (4× samples, color + depth resolved)
+        ├── Pass 2: TAA resolve (depth-reprojected history) → current ping-pong buffer
         └── Pass 3: blit current → screen (chromatic aberration if glitchStrength > 0)
 ```
 
@@ -167,7 +169,20 @@ requestAnimationFrame
 
 - `renderer.setPixelRatio(1)` — TAA replaces native SSAA
 - MSAA target (`samples: 4`) handled by Three.js internally
-- TAA blend factor: `0.15` (still) → up to `0.95` (fast motion)
+- TAA blend factor: `0.04` (still — accumulates the 32-sample jitter into a static supersample);
+  in motion `min(0.30, 0.10 + velT * 0.02)` — walk ≈ 0.15, sprint ≈ 0.25, fast fall caps at 0.30.
+  Neighbourhood clamp only engages when moving.
+- **Full reprojection (rotation + translation)**: history is sampled at `M · ndc` with
+  `M = P · V_prev · M_curr · P⁻¹` applied to `(uv*2-1, depth*2-1, 1)` — depth comes from a
+  `DepthTexture` attached to the MSAA target (Three.js resolves it via blitFramebuffer).
+  Projective transforms compose without intermediate w-divide. Sky/star pixels sit at
+  depth 1.0 → negligible parallax, consistent with the camera-relative skybox.
+  Off-screen / behind-camera `prevUV` falls back to the current frame; disocclusion at
+  building silhouettes is contained by the neighbourhood clamp (no previous-depth rejection).
+- `TAAPass.setSize` recreates the MSAA target (attached depth textures don't reliably follow
+  `setSize`).
+- TAA ping-pong buffers are `HalfFloatType` — 8-bit accumulation at low blend quantizes and
+  stalls convergence (banding). Do not downgrade them.
 - All geometry has `frustumCulled = false`
 - Single shared `RawShaderMaterial`; `onBeforeRender` mutates `uSeed` and `uModel` per mesh
 
@@ -251,6 +266,8 @@ requestAnimationFrame
 - `scene.frag`: branches on `vNormal.y` (floor / wall / roof); animated binary glyph grid with
   LOD blending; Tron-grid floor with minor/major gridlines
 - `taa.frag`: `uVelocity`-driven blend; `uHistValid` guards first frame;
+  history sampled at `uReproject`-transformed UV using `uDepth` (full reprojection,
+  identity when still);
   `uGlitch` (0–1) adds chromatic aberration during the blit pass (Pass 3 only)
 
 ## Dev Commands

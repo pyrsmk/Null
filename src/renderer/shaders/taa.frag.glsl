@@ -1,7 +1,9 @@
-precision mediump float;
+precision highp float;
 
 uniform sampler2D uCurrent;
 uniform sampler2D uHistory;
+uniform sampler2D uDepth;
+uniform mat4      uReproject;
 uniform vec2      uTexelSize;
 uniform float     uBlend;
 uniform float     uHistValid;
@@ -28,7 +30,21 @@ void main() {
     return;
   }
 
-  vec3 hist = texture(uHistory, vUV).rgb;
+  // Reprojection complète (rotation + translation) : le NDC courant,
+  // reconstruit avec la profondeur du pixel, est envoyé sur la frame
+  // précédente. À l'arrêt la matrice est l'identité → prevUV == vUV.
+  // Ciel/étoiles : depth = 1.0 (far) → parallaxe négligeable, correct.
+  float depth   = texture(uDepth, vUV).r;
+  vec4 prevClip = uReproject * vec4(vUV * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+  vec2 prevUV   = prevClip.xy / prevClip.w * 0.5 + 0.5;
+  if (prevClip.w <= 0.0 ||
+      prevUV.x < 0.0 || prevUV.x > 1.0 ||
+      prevUV.y < 0.0 || prevUV.y > 1.0) {
+    fragColor = vec4(curr, 1.0);
+    return;
+  }
+
+  vec3 hist = texture(uHistory, prevUV).rgb;
 
   if (uVelocity > 0.001) {
     vec2 ts = uTexelSize;
