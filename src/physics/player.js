@@ -12,6 +12,7 @@ const TRANSITION_FRAMES    = 20;
 const GLITCH_FRAMES        = 10;
 const AIR_STEER            = 0.12;
 const MIN_FALL_SPEED       = 1;
+const PROJECTION_SPEED     = 80;
 
 // Reusable temporaries
 const _yAxis = new THREE.Vector3(0, 1, 0);
@@ -29,9 +30,10 @@ const _predUp   = new THREE.Vector3();
 const _predSnap = new THREE.Vector3();
 
 export class Player {
-  constructor(world, indicator = null) {
-    this._world     = world;
-    this._indicator = indicator;
+  constructor(world, indicator = null, eIndicator = null) {
+    this._world      = world;
+    this._indicator  = indicator;
+    this._eIndicator = eIndicator;
 
     this.pos = new THREE.Vector3(
       0, CAM_BASE_Y + CFG.camRadius,
@@ -54,6 +56,9 @@ export class Player {
     this._bobStrength = 0;
 
 
+    this._pendingTransition   = null;
+    this._projecting          = false;
+    this._projectTarget       = null;
     this._transitionFrames    = 0;
     this._transitionTotal     = 0;
     this._transitionStartRot  = new THREE.Quaternion();
@@ -128,12 +133,42 @@ export class Player {
       return;
     }
 
+    // ── Projection flight (E key grapple) ─────────────────────────
+    if (this._projecting) {
+      const surf = this._projectTarget.surface;
+      const sd   = surf.signedDist(this.pos);
+
+      if (this._eIndicator)
+        this._eIndicator.setTarget(this._projectTarget.hitPoint, surf.normal);
+
+      if (sd <= CAM_BASE_Y + CFG.camRadius) {
+        // Arrivée : snap perpendiculaire à la surface, puis transition
+        this.pos.addScaledVector(surf.normal, (CAM_BASE_Y + CFG.camRadius) - sd);
+        this._projecting    = false;
+        this._projectTarget = null;
+        this._vel.set(0, 0, 0);
+        // Réorientation : regard perpendiculaire à la surface (= -normal dans le référentiel local)
+        _v1.set(-surf.normal.x, -surf.normal.y, -surf.normal.z)
+           .applyQuaternion(_q1.copy(this.worldRotation).conjugate());
+        this.pitch = -Math.asin(Math.max(-1, Math.min(1, _v1.y)));
+        this.yaw   = Math.atan2(_v1.x, -_v1.z);
+        if (this._eIndicator) this._eIndicator.setTarget(null, null);
+        this._startTransition({
+          nx: surf.normal.x, ny: surf.normal.y, nz: surf.normal.z,
+          offset: surf.offset,
+        });
+        return;
+      }
+
+      this.pos.add(this._vel);
+      return;
+    }
+
     if (this.glitchFrames > 0) this.glitchFrames--;
 
     const sprint      = keyboard.has('ShiftLeft') || keyboard.has('ShiftRight')
                      || (gp?.sprint ?? false);
     const jumpPressed = keyboard.wasJustPressed('Space') || (gp?.jump ?? false);
-    const ePressed    = keyboard.wasJustPressed('KeyE');
 
     const worldUp = this.getWorldUp(_v1);
 
@@ -263,21 +298,40 @@ export class Player {
       }
     }
 
-    // ── E key: surface transition ───────────────────────────────────
-    if (ePressed) {
-      // Compute look direction from camera orientation, then restore _v1 (worldUp)
-      this.getCameraQuaternion(_q2);
-      const lookDir = _v3.set(0, 0, -1).applyQuaternion(_q2);
-      this.getWorldUp(_v1);
-      const surface = this._world.findTransitionCandidate(this.pos, worldUp, lookDir, 150);
-      if (surface) {
-        this._startTransition({
-          nx:     surface.normal.x,
-          ny:     surface.normal.y,
-          nz:     surface.normal.z,
-          offset: surface.offset,
-        });
+    // ── E key: surface transition (+ indicator) ────────────────────
+    this.getCameraQuaternion(_q2);
+    const lookDir   = _v3.set(0, 0, -1).applyQuaternion(_q2);
+    this.getWorldUp(_v1); // rafraîchit worldUp/_v1 écrasé par getCameraQuaternion
+    const eHeld     = keyboard.has('KeyE');
+    const eReleased = keyboard.wasJustReleased('KeyE');
+
+    if (eHeld) {
+      const transitionResult = this._world.findTransitionCandidate(
+        this.pos, worldUp, lookDir, Infinity,
+      );
+      this._pendingTransition = transitionResult;
+      if (this._eIndicator) {
+        if (transitionResult) {
+          this._eIndicator.setTarget(transitionResult.hitPoint, transitionResult.surface.normal);
+        } else {
+          this._eIndicator.setTarget(null, null);
+        }
       }
+    } else if (eReleased) {
+      if (this._pendingTransition) {
+        const { hitPoint } = this._pendingTransition;
+        _v2.copy(hitPoint).sub(this.pos);
+        if (_v2.lengthSq() > 0) _v2.normalize();
+        this._vel.copy(_v2).multiplyScalar(PROJECTION_SPEED);
+        this._projecting    = true;
+        this._projectTarget = this._pendingTransition;
+        this._pendingTransition = null;
+      } else {
+        if (this._eIndicator) this._eIndicator.setTarget(null, null);
+      }
+    } else {
+      this._pendingTransition = null;
+      if (this._eIndicator) this._eIndicator.setTarget(null, null);
     }
   }
 

@@ -1,8 +1,6 @@
 import * as THREE from 'three';
 import { hexToRGB } from '../helpers.js';
 
-const IND_COLOR            = '#FF3F7F';
-const IND_COLOR_RGB        = hexToRGB(IND_COLOR);
 const IND_BASE             = 16;
 const IND_RING_RADIUS      = 40;
 const FLASH_DUR            = 0.5;  // seconds
@@ -21,7 +19,8 @@ const _q     = new THREE.Quaternion();
 const _color = new THREE.Color();
 
 export class LandingIndicator {
-  constructor() {
+  constructor(color = '#FF3F7F') {
+    this._colorRGB = hexToRGB(color);
     const mat = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: `
@@ -127,7 +126,7 @@ void main() {
       _m.compose(_pos, _q, _s);
       this._mesh.setMatrixAt(i, _m);
       const b = (IND_ALPHA_RING + IND_ALPHA_RING_PULSE * Math.sin(t * 3.0 + i * 0.5)) * alpha;
-      this._mesh.setColorAt(i, _color.setRGB(IND_COLOR_RGB.r * b, IND_COLOR_RGB.g * b, IND_COLOR_RGB.b * b));
+      this._mesh.setColorAt(i, _color.setRGB(this._colorRGB.r * b, this._colorRGB.g * b, this._colorRGB.b * b));
     }
 
     this._mesh.instanceMatrix.needsUpdate = true;

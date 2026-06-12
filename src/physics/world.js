@@ -146,11 +146,19 @@ export class World {
     return result;
   }
 
+  // Returns all registered surfaces (all grid cells + globals).
+  _all() {
+    const result = this._global.slice();
+    for (const cell of this._grid.values())
+      for (const obj of cell) result.push(obj);
+    return result;
+  }
+
   // Returns the surface the player is looking at (ray from pos along lookDir),
   // whose normal diverges ≥ 45° from worldUp and that the player stands in front of.
   findTransitionCandidate(pos, worldUp, lookDir, maxDist) {
     let best = null, bestT = maxDist;
-    for (const obj of this._nearby(pos.x, pos.z)) {
+    for (const obj of this._all()) {
       if (!(obj instanceof WallFace)) continue;
       const dot = _wup.copy(obj.normal).dot(worldUp);
       if (Math.acos(Math.max(-1, Math.min(1, dot))) < Math.PI / 4) continue;
@@ -166,6 +174,7 @@ export class World {
       bestT = t;
       best = obj;
     }
-    return best;
+    if (!best) return null;
+    return { surface: best, hitPoint: _ray.copy(pos).addScaledVector(lookDir, bestT).clone() };
   }
 }

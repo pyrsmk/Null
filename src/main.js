@@ -60,11 +60,13 @@ for (const bld of buildingsData) {
 world.addGlobal(new WallFace(0,1,0, 0, -CFG.far, CFG.far, -CFG.far, CFG.far));
 
 // ── Landing indicator ────────────────────────────────────────────
-const indicator = new LandingIndicator();
+const indicator   = new LandingIndicator();
+const eIndicator  = new LandingIndicator('#5478FF');
 scene.add(indicator.mesh);
+scene.add(eIndicator.mesh);
 
 // ── Player ──────────────────────────────────────────────────────
-const player = new Player(world, indicator);
+const player = new Player(world, indicator, eIndicator);
 
 // ── Input ────────────────────────────────────────────────────────
 const keyboard = new Keyboard();
@@ -108,6 +110,7 @@ function loop(now) {
   camera.updateMatrixWorld();
 
   indicator.update(camera, now);
+  eIndicator.update(camera, now);
 
   sceneMaterial.uniforms.uView.value.copy(camera.matrixWorldInverse);
   sceneMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
