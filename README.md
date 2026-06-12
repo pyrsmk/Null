@@ -6,12 +6,23 @@ On incarne un Agent IA dépêché pour remettre un système en place après une 
 
 ## TODO
 
-- saut de base trop court
+- l'effet trampoline pue la merde
+- c'est pas rare que je tombe sur un coin d'immeuble plutôt qu'une surface, et du coup je ne peux pas en bouger latéralement sans sauter
+- quand on est sur le bord d'un toit, on peut pas bouger latéralement, on doit nécessairement sauter
+- c'est pas rare que quand je saute je tombe sur le bord d'un toit, et je ne peux pas en bouger non plus facilement
+- le saut marcher très mal sur le bord d'un toit
+- l'animation d'aterrissage est naze
+- la touche E affiche aussi un indicateur
+- la touche E nous propulse directement vers la surface
 - ajouter le saut chargé en appuyant longtemps sur Espace
+- ajouter le ralentissement du temps avec la touche A
+
 - améliorer les soucis de moiré
 - faire en sorte que les objets soient des vraies classes et gèrent leur rendu
 - fichier de conf keyboard.json + mouse.json (pour le moment vide)
 - prendre en charge la manette + controller.json
+
+- grosse refacto structurelle => à voir...
 
 ## Idées
 

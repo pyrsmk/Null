@@ -68,8 +68,8 @@ export class WallFace extends Surface {
     if (sd > margin) return false;
     if (sd < -margin) return false; // deep penetration, skip
     if (!this._inBounds(pos, margin)) return false;
-    const perp = vec.dot(this._normal);
-    return perp < 0; // approaching (sd ≥ 0) or penetrating and continuing (sd < 0)
+    if (sd < 0) return true; // already penetrating → eject unconditionally
+    return vec.dot(this._normal) < 0;
   }
 
   alterVelocity(pos, vel, _margin) {
@@ -86,6 +86,9 @@ export class WallFace extends Surface {
       vel.z -= sd * this._normal.z;
     }
   }
+
+  // Public signed distance (positive = on normal side).
+  signedDist(pos) { return this._signedDist(pos); }
 
   // Perpendicular distance from pos to face plane — used for transition ranking.
   distanceTo(pos) {

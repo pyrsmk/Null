@@ -71,10 +71,17 @@ These rules govern how the engine is designed. They take priority over implement
 3. **Surfaces block in both directions.** A surface has no "accessible side". The normal is used
    only to decompose velocity and to orient the player during a transition (E key).
 
-4. **`alterVelocity` is the only mechanism for constraining movement.** A surface never assigns
-   `pos` directly. In the normal case penetration doesn't happen; if it does (e.g. a fast fall
-   skips the margin), `alterVelocity` adds a velocity impulse proportional to `−signedDist` to
-   recover next frame. Position is corrected through velocity, never by teleporting.
+4. **`alterVelocity` is the primary mechanism for constraining movement.** Lateral and wall
+   collisions only modify `vel`, never `pos` directly. Two controlled exceptions exist where
+   `pos` is snapped directly:
+   - **Position-correction pass** (pre-collision): iterative snap via `nearbySurfaces` to
+     prevent the player from sinking through horizontal surfaces at building-floor borders.
+   - **Ground-height snap** (post-`alterVelocity`): after a ground hit detected via swept
+     margin, `pos` is adjusted so feet are at exactly `camRadius` from the surface. Without
+     this, `_grounded` turns false the next frame (swept `feetMargin` shrinks back to
+     `camRadius`, and `sd_feet > camRadius` → not approaching → can't jump).
+   Deep lateral penetration is recovered through the depenetration impulse in `alterVelocity`
+   (`vel -= sd * normal` when `sd < 0`).
 
 5. **The player's volume is a property of the player, not of surfaces.** `camRadius` is passed
    as `margin` to `isCollidingWith` and `alterVelocity`. Surfaces do not hardcode it.
@@ -158,7 +165,10 @@ requestAnimationFrame
   Skips if `signedDist < -margin` (deep penetration already handled by depenetration impulse).
 - **Floor surface** — `WallFace(0,1,0, 0, -far,far, -far,far)`, registered via `addGlobal`.
   Finite bounds: the player falls into the void beyond the floor edge.
+- **`WallFace.signedDist(pos)`** — public wrapper around `_signedDist`; positive = on normal side.
 - **`World`** — spatial grid `"col,row"` → 3×3 neighbourhood queries + global list.
+- **`World.nearbySurfaces(pos, normalMargin)`** — returns WallFaces within lateral `camRadius`
+  and `sd ∈ (-camRadius, normalMargin)` of `pos`; used by position-correction pass (no velocity check).
 - **`findTransitionCandidate(pos, worldUp, maxDist)`** — nearest surface with normal diverging
   ≥45° from `worldUp`, on whose normal side the player stands.
 - `main.js` builds the world: 4 lateral `WallFace`s + 1 roof per building in their grid cell.
@@ -168,8 +178,19 @@ requestAnimationFrame
 - No Rapier yet — fully hand-rolled
 - **"World rotates" model:** `worldRotation` quaternion maps local Y → current surface normal.
 - **Each frame:** decompose `_vel` → apply gravity to normal component → apply input to plane
-  component → recombine → two `isCollidingWith` queries → `alterVelocity` on hits → `pos += _vel`.
-- **Jump:** impulse `JUMP_STRENGTH × (sprint ? 1.6 : 1.0)` added to normal component when grounded.
+  component → recombine → **position-correction pass** → two `isCollidingWith` queries →
+  `alterVelocity` on hits → **ground-height snap** → `pos += _vel`.
+- **Position-correction pass:** iterative loop (max 5) via `nearbySurfaces(pos, CAM_BASE_Y + camRadius)`.
+  For each horizontal surface where `sd ∈ (0, HMARGIN)` (camera above, feet too close):
+  snap `pos += (HMARGIN - sd) * normal` so feet land at `camRadius` from surface.
+  If 5 iterations don't converge → revert `pos` to pre-pass value (`_posPrev`).
+  Lateral surfaces are untouched here; `alterVelocity` handles them.
+- **Ground-height snap:** after `alterVelocity` on ground hits (before `pos += _vel`),
+  `pos` is snapped so feet are at exactly `camRadius` from `groundHits[0]`.
+  Fixes the case where the player lands from a fast fall: swept `feetMargin` detects
+  the ground while `pos` is still above standing height; the snap normalises `pos` so
+  the next frame's unswept detection (`feetMargin = camRadius`) still finds the surface.
+- **Jump:** impulse `JUMP_HEIGHT` (base) or `JUMP_HEIGHT_SPRINT` (sprint) added to normal component when grounded.
   `_jumpedWithSprint` is set at jump time and tracked until landing.
 - **Sprint:** 4× ground speed. Airborne: `_jumpedWithSprint` preserves 4× max speed cap and
   `1.1×` steer multiplier; a non-sprint jump caps at base speed with no boost.

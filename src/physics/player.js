@@ -1,18 +1,20 @@
 import * as THREE from 'three';
 import { CFG } from '../config.js';
 
-const JUMP_STRENGTH      = 2.5;
-const GRAVITY            = 0.09;
-const CAM_BASE_Y         = 75;
-const BOB_AMPLITUDE      = 1.75;
-const BOB_SPEED          = 0.10;
-const TRANSITION_FRAMES  = 20;
-const GLITCH_FRAMES      = 10;
-const AIR_STEER          = 0.12;
-const MIN_FALL_SPEED     = 1;
-const LAND_FRAMES        = 30;
-const LAND_AMPLITUDE     = 40;
-const LAND_MIN_AIR       = 115; // sprint-jump ≈ 89 frames; +26 frames buffer for height variance
+const JUMP_HEIGHT          = 3.5;
+const JUMP_HEIGHT_SPRINT   = 7.0;
+const JUMP_FORWARD_BOOST   = 2.0;
+const GRAVITY              = 0.09;
+const CAM_BASE_Y           = 75;
+const BOB_AMPLITUDE        = 1.75;
+const BOB_SPEED            = 0.10;
+const TRANSITION_FRAMES    = 20;
+const GLITCH_FRAMES        = 10;
+const AIR_STEER            = 0.12;
+const MIN_FALL_SPEED       = 1;
+const LAND_FRAMES          = 30;
+const LAND_AMPLITUDE       = 40;
+const LAND_MIN_AIR         = 115; // sprint-jump ≈ 89 frames; +26 frames buffer for height variance
 
 // Reusable temporaries
 const _yAxis = new THREE.Vector3(0, 1, 0);
@@ -22,9 +24,17 @@ const _v3    = new THREE.Vector3();
 const _q1    = new THREE.Quaternion();
 const _q2    = new THREE.Quaternion();
 
+// Reusable temporaries for landing prediction (isolated from update() temps)
+const _predPos  = new THREE.Vector3();
+const _predVel  = new THREE.Vector3();
+const _predFeet = new THREE.Vector3();
+const _predUp   = new THREE.Vector3();
+const _predSnap = new THREE.Vector3();
+
 export class Player {
-  constructor(world) {
-    this._world = world;
+  constructor(world, indicator = null) {
+    this._world     = world;
+    this._indicator = indicator;
 
     this.pos = new THREE.Vector3(
       0, CAM_BASE_Y + CFG.camRadius,
@@ -41,6 +51,7 @@ export class Player {
     this._vel             = new THREE.Vector3();
     this._grounded        = true;
     this._jumpedWithSprint = false;
+    this._airMaxSpeed      = CFG.camSpeed;
 
     this._bobPhase    = 0;
     this._bobStrength = 0;
@@ -58,6 +69,7 @@ export class Player {
     this._transitionTargetPos = new THREE.Vector3();
     this.glitchFrames         = 0;
     this._bobOffset           = 0;
+    this._launchFeetDotUp     = 0;
   }
 
   get x() { return this.pos.x; }
@@ -98,6 +110,7 @@ export class Player {
     this._transitionStartPos.copy(this.pos);
 
     this._vel.set(0, 0, 0);
+    this._airMaxSpeed      = CFG.camSpeed;
     this._transitionFrames = TRANSITION_FRAMES;
     this._transitionTotal  = TRANSITION_FRAMES;
   }
@@ -153,23 +166,25 @@ export class Player {
     let newNormalComp = normalComp - GRAVITY;
 
     // ── Directional control ─────────────────────────────────────────
-    const groundSpeed    = CFG.camSpeed * (sprint ? 4 : 1);
+    const groundSpeed = CFG.camSpeed * (sprint ? 4.5 : 1.5);
     if (this._grounded) {
       // Direct control: replace plane velocity with input
       planeVel.copy(inputDir).multiplyScalar(groundSpeed);
     } else {
-      // Air: small steer nudge, clamp to max speed
+      // Air: small steer nudge, clamp to max speed (preserving jump boost)
       const steer  = CFG.camSpeed * AIR_STEER;
       planeVel.addScaledVector(inputDir, steer);
-      const maxSpd = CFG.camSpeed * (this._jumpedWithSprint ? 4 : 1);
+      const maxSpd = Math.max(CFG.camSpeed * (this._jumpedWithSprint ? 4 : 1), this._airMaxSpeed);
       const spd    = planeVel.length();
       if (spd > maxSpd) planeVel.multiplyScalar(maxSpd / spd);
     }
 
     // ── Jump ────────────────────────────────────────────────────────
     if (jumpPressed && this._grounded) {
-      newNormalComp          += JUMP_STRENGTH * (sprint ? 1.6 : 1.0);
+      newNormalComp          += sprint ? JUMP_HEIGHT_SPRINT : JUMP_HEIGHT;
       this._jumpedWithSprint  = sprint;
+      if (lx !== 0 || lz !== 0) planeVel.addScaledVector(inputDir, JUMP_FORWARD_BOOST);
+      this._airMaxSpeed = planeVel.length();
     }
 
     // ── Recombine velocity ──────────────────────────────────────────
@@ -181,20 +196,42 @@ export class Player {
     const velDown    = Math.max(0, -this._vel.dot(worldUp));
     const feetMargin = CFG.camRadius + velDown;
     const feetPos    = _v2.copy(this.pos).addScaledVector(worldUp, -CAM_BASE_Y);
-    const groundHits = this._world.isCollidingWith(feetPos, this._vel, feetMargin)
-      .filter(s => s.normal.dot(worldUp) > 0.5);
+    const feetHits   = this._world.isCollidingWith(feetPos, this._vel, feetMargin);
+    const groundHits        = feetHits.filter(s =>  s.normal.dot(worldUp) > 0.5);
+    const lateralHitsAtFeet = feetHits.filter(s =>  s.normal.dot(worldUp) <= 0.5);
     for (const s of groundHits) s.alterVelocity(feetPos, this._vel, CFG.camRadius);
+    // Lateral surfaces at feet: snap position only, no velocity change (avoids bounce)
+    for (const s of lateralHitsAtFeet) {
+      const sd = s.signedDist(feetPos);
+      if (sd < CFG.camRadius) {
+        const push = CFG.camRadius - sd;
+        this.pos.addScaledVector(s.normal, push);
+        feetPos.addScaledVector(s.normal, push);
+      }
+    }
+    // Snap to exact standing height when grounded. The swept feetMargin can detect
+    // the ground while the player is still above the correct standing height; without
+    // this snap, _grounded turns false the very next frame (feetMargin shrinks back
+    // to camRadius and sd_feet > camRadius → not approaching → can't jump).
+    if (groundHits.length > 0) {
+      const sdFeet = groundHits[0].signedDist(feetPos);
+      this.pos.addScaledVector(groundHits[0].normal, CFG.camRadius - sdFeet);
+    }
 
     // ── Collision : body (lateral obstacles) ───────────────────────
     for (const s of this._world.isCollidingWith(this.pos, this._vel, CFG.camRadius))
       s.alterVelocity(this.pos, this._vel, CFG.camRadius);
 
     // ── Move ────────────────────────────────────────────────────────
+    const preMoveH = this.pos.dot(worldUp) - CAM_BASE_Y;
     this.pos.add(this._vel);
 
     // ── Update grounded state (used next frame for input control) ───
     const wasGrounded  = this._grounded;
     this._grounded     = groundHits.length > 0;
+
+    if (wasGrounded && !this._grounded)
+      this._launchFeetDotUp = preMoveH;
 
     // First frame of free-fall (walked off edge, no jump): apply minimum downward speed
     if (wasGrounded && !this._grounded && !jumpPressed) {
@@ -202,12 +239,19 @@ export class Player {
       if (normalNow < 0 && normalNow > -MIN_FALL_SPEED)
         this._vel.addScaledVector(worldUp, -MIN_FALL_SPEED - normalNow);
     }
+    // Sprint-jump landing flash
+    if (!wasGrounded && this._grounded && this._jumpedWithSprint && this._indicator) {
+      const wu = this.getWorldUp(_v3);
+      _v2.copy(this.pos).addScaledVector(wu, -(CAM_BASE_Y + CFG.camRadius));
+      this._indicator.triggerFlash(_v2, wu);
+    }
+
     if (this._grounded) this._jumpedWithSprint = false;
 
     // ── Landing squish ──────────────────────────────────────────────
     if (this._grounded) {
       if (!wasGrounded && this._airFrames > LAND_MIN_AIR) {
-        this._landStrength = Math.min(1.0, velDown / (JUMP_STRENGTH * 2.0));
+        this._landStrength = Math.min(1.0, velDown / (JUMP_HEIGHT * 2.0));
         this._landPhase    = LAND_FRAMES;
       }
       this._airFrames = 0;
@@ -230,6 +274,19 @@ export class Player {
     if (this._bobStrength > 0 && this._grounded) this._bobPhase += BOB_SPEED * (sprint ? 2.5 : 1);
     this._bobOffset = Math.sin(this._bobPhase) * BOB_AMPLITUDE * this._bobStrength;
 
+    // ── Indicator target ────────────────────────────────────────────
+    if (this._indicator) {
+      if (!this._grounded && this._jumpedWithSprint) {
+        const landing = this.predictLanding();
+        this._indicator.setTarget(
+          landing ? landing.surfacePos : null,
+          landing ? landing.normal     : null,
+        );
+      } else {
+        this._indicator.setTarget(null, null);
+      }
+    }
+
     // ── E key: surface transition ───────────────────────────────────
     if (ePressed) {
       // Compute look direction from camera orientation, then restore _v1 (worldUp)
@@ -246,5 +303,59 @@ export class Player {
         });
       }
     }
+  }
+
+  // ── Landing prediction ─────────────────────────────────────────────
+  // Simulates ballistic trajectory (gravity only, no input) from current state.
+  // The indicator always sits on the horizontal plane at the player's feet level
+  // (feetDotUp in world space), EXCEPT when a lateral surface above that plane
+  // intercepts the arc first.
+
+  predictLanding() {
+    if (this._grounded) return null;
+
+    this.getWorldUp(_predUp);
+    _predPos.copy(this.pos);
+    _predVel.copy(this._vel);
+
+    const feetDotUp = this._launchFeetDotUp;
+    let wentAbove = false;
+
+    for (let i = 0; i < 300; i++) {
+      _predVel.addScaledVector(_predUp, -GRAVITY);
+      _predFeet.copy(_predPos).addScaledVector(_predUp, -CAM_BASE_Y);
+      const feetH = _predFeet.dot(_predUp);
+
+      // Lateral surface above the feet plane → show on wall
+      if (feetH > feetDotUp) {
+        const bodyHits = this._world.isCollidingWith(_predPos, _predVel, CFG.camRadius)
+          .filter(s => s.normal.dot(_predUp) <= 0.5);
+        if (bodyHits.length > 0) {
+          const sd = bodyHits[0].signedDist(_predPos);
+          return {
+            surfacePos: _predPos.clone().addScaledVector(bodyHits[0].normal, -sd),
+            normal: bodyHits[0].normal.clone(),
+          };
+        }
+      }
+
+      // Arc returned to the feet plane after going above it
+      if (wentAbove && feetH <= feetDotUp) {
+        return {
+          surfacePos: _predFeet.clone().addScaledVector(_predUp, feetDotUp - feetH),
+          normal: _predUp.clone(),
+        };
+      }
+
+      if (feetH > feetDotUp) wentAbove = true;
+      _predPos.add(_predVel);
+      if (i === 59) _predSnap.copy(_predPos);
+    }
+
+    // Fallback (e.g. falling off a ledge): step-60 projected to the feet plane
+    return {
+      surfacePos: _predSnap.clone().addScaledVector(_predUp, feetDotUp - _predSnap.dot(_predUp)),
+      normal: _predUp.clone(),
+    };
   }
 }

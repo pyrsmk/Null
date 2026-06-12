@@ -13,6 +13,7 @@ import { totalW, totalD } from './config.js';
 import { Keyboard } from './input/keyboard.js';
 import { Mouse } from './input/mouse.js';
 import { Gamepad } from './input/gamepad.js';
+import { LandingIndicator } from './renderer/landingIndicator.js';
 
 // ── Three.js renderer ──────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
@@ -58,8 +59,12 @@ for (const bld of buildingsData) {
 // Finite floor surface matching the floor quad extent
 world.addGlobal(new WallFace(0,1,0, 0, -CFG.far, CFG.far, -CFG.far, CFG.far));
 
+// ── Landing indicator ────────────────────────────────────────────
+const indicator = new LandingIndicator();
+scene.add(indicator.mesh);
+
 // ── Player ──────────────────────────────────────────────────────
-const player = new Player(world);
+const player = new Player(world, indicator);
 
 // ── Input ────────────────────────────────────────────────────────
 const keyboard = new Keyboard();
@@ -101,6 +106,8 @@ function loop(now) {
   camera.position.copy(player.pos).addScaledVector(player.getWorldUp(_loopWU), player._bobOffset + player._landOffset);
   player.getCameraQuaternion(camera.quaternion);
   camera.updateMatrixWorld();
+
+  indicator.update(camera, now);
 
   sceneMaterial.uniforms.uView.value.copy(camera.matrixWorldInverse);
   sceneMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
